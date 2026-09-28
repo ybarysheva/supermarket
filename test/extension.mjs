@@ -24,11 +24,16 @@ function resultsPage(query, index) {
         <h2><a href="/dp/${asin}"><span>${index === "wholefoods" ? "365 " : "Fresh "}${query} #${i + 1}</span></a></h2>
         <span class="a-price"><span class="a-offscreen">$${(2 + i).toFixed(2)}</span></span>
         <span>($0.${i + 1}0/Ounce)</span>
-        <form method="post" action="/cart/add-to-cart/ref=sm">
+        ${
+          // The last one is sold by weight: no Add button in search results.
+          i === 4
+            ? ""
+            : `<form method="post" action="/cart/add-to-cart/ref=sm">
           <input type="hidden" name="anti-csrftoken-a2z" value="tok-${asin}">
           <input type="hidden" name="items[0.base][asin]" value="${asin}">
           <input type="hidden" name="items[0.base][quantity]" value="1">
-        </form>
+        </form>`
+        }
       </div>`;
   });
   return `<html><body><div class="s-main-slot">${cards.join("")}</div></body></html>`;
@@ -104,11 +109,19 @@ await page.locator(".sm-w-tools button", { hasText: "Flat shelves" }).click();
 await until(() => page.locator(".sm-grab").count());
 await page.locator(".sm-grab").first().click();
 await page.locator(".sm-grab").nth(1).click();
-t.check("items go in the cart", (await page.locator(".sm-cart-count").textContent()) === "2");
+await page.locator(".sm-grab").nth(4).click(); // the sold-by-weight one
+t.check("items go in the cart", (await page.locator(".sm-cart-count").textContent()) === "3");
 
-// Checkout adds both to the real cart, then goes to Amazon's cart page.
+// Checkout adds what it can, lists the one it can't, then goes to the cart.
 await page.locator(".sm-cart-button").click();
 await page.locator(".sm-cart .sm-primary").click();
+const panel = page.locator(".sm-cart-panel");
+await until(() => panel.getByText("Almost done").count());
+t.check("lists the item it couldn't add", (await panel.locator(".sm-failed li").count()) === 1);
+t.check("with no stray text", !/false|undefined|null/.test(await panel.textContent()), await panel.textContent());
+await panel.getByRole("button", { name: "Remove" }).click();
+t.check("Remove takes it out of the cart", (await page.locator(".sm-cart-count").textContent()) === "0");
+await panel.getByText("Go to my Amazon Fresh cart").click();
 await page.waitForURL(/\/cart\/localmarket/, { timeout: 20000 }).catch(() => {});
 t.check("checkout posts each item to Amazon", seen.posts.length === 2 && seen.posts.every((b) => /anti-csrftoken-a2z=tok-/.test(b)), seen.posts);
 t.check("and lands on the Fresh cart", /\/cart\/localmarket/.test(page.url()), page.url());

@@ -257,11 +257,19 @@
       }
     }
 
-    setQty(id, qty) {
+    setQty(id, qty, { keepPanel = false } = {}) {
       if (qty <= 0) this.basket.delete(id);
       else this.basket.get(id).qty = qty;
       this.saveBasket();
-      this.renderCart();
+      if (keepPanel) {
+        // Just refresh the count on the cart button; leave the open panel as is.
+        const { count, total, unpriced } = this.basketTotals();
+        const btn = this.el.cart.querySelector(".sm-cart-button");
+        if (btn) {
+          btn.querySelector(".sm-cart-count").textContent = count;
+          btn.querySelector(".sm-cart-total").textContent = money(total) + (unpriced ? "+" : "");
+        }
+      } else this.renderCart();
       this.updateBadges();
     }
 
@@ -299,7 +307,10 @@
         status.textContent = `Scanning item ${i + 1} of ${items.length}: ${items[i].product.name}`;
         const r = await this.adapter.addToCart(items[i].product, items[i].qty);
         if (r.ok) this.basket.delete(items[i].product.id);
-        else failed.push({ ...items[i], message: r.message });
+        else {
+          items[i].manual = r.message || "Add this one on its product page.";
+          failed.push({ ...items[i], message: r.message });
+        }
       }
       this.saveBasket();
       this.updateBadges();
@@ -312,14 +323,33 @@
       }
 
       const total = items.reduce((t, it) => t + (it.product.price || 0) * it.qty, 0);
+      const removeFailed = (f, li) => {
+        this.setQty(f.product.id, 0, { keepPanel: true });
+        li.remove();
+      };
       panel.replaceChildren(
+        ...[
         h("h2", {}, cartUrl ? "Almost done" : "Receipt"),
         !cartUrl && h("div", { class: "sm-receipt" }, items.map((it) => h("div", {}, h("span", {}, `${it.qty} × ${it.product.name}`), h("span", {}, it.product.price == null ? "—" : money(it.product.price * it.qty)))), h("div", { class: "sm-receipt-total" }, h("span", {}, "TOTAL"), h("span", {}, money(total)))),
         !cartUrl && h("p", {}, "Thanks for practising! This is the demo store, so nothing was bought."),
         failed.length > 0 && h("p", {}, `${failed.length} item${failed.length > 1 ? "s" : ""} couldn't be scanned automatically. Open each one and add it on its page:`),
-        failed.length > 0 && h("ul", { class: "sm-failed" }, failed.map((f) => h("li", {}, h("a", { href: f.product.url, target: "_blank", rel: "noopener" }, `${f.qty} × ${f.product.name} ↗`), f.message && h("small", {}, f.message)))),
+        failed.length > 0 &&
+          h("ul", { class: "sm-failed" },
+            failed.map((f) => {
+              const li = h("li", {},
+                h("div", {},
+                  h("a", { href: f.product.url, target: "_blank", rel: "noopener" }, `${f.qty} × ${f.product.name} ↗`),
+                  f.message && h("small", {}, f.message)
+                ),
+                h("button", { class: "sm-ghost sm-remove", onclick: () => removeFailed(f, li), title: "Take it out of this cart" }, "Remove")
+              );
+              return li;
+            })
+          ),
+        failed.length > 0 && h("p", { class: "sm-fine" }, "They stay in your cart here until you add them on Amazon or remove them."),
         cartUrl && h("a", { class: "sm-primary", href: cartUrl }, `Go to my ${this.adapter.name} cart`),
-        h("button", { class: "sm-secondary", onclick: () => this.renderCart() }, "Back to shopping")
+        h("button", { class: "sm-secondary", onclick: () => this.renderCart() }, "Back to shopping"),
+        ].filter(Boolean)
       );
     }
 
@@ -662,10 +692,14 @@
         !items.length && h("p", { class: "sm-empty" }, "Your cart is empty. Pick things up off the shelves!"),
         items.length > 0 &&
           h("ul", { class: "sm-cart-items" },
-            items.map(({ product: p, qty }) =>
+            items.map(({ product: p, qty, manual }) =>
               h("li", {},
                 p.image ? h("img", { src: p.image, alt: "" }) : h("span"),
-                h("div", { class: "sm-cart-name" }, p.name, p.price != null && h("small", {}, `${money(p.price)} each`)),
+                h("div", { class: "sm-cart-name" },
+                  p.name,
+                  p.price != null && h("small", {}, `${money(p.price)} each`),
+                  manual && h("small", { class: "sm-manual" }, "Couldn't add automatically: ", h("a", { href: p.url, target: "_blank", rel: "noopener" }, "add it on its page ↗"))
+                ),
                 h("div", { class: "sm-stepper" },
                   h("button", { onclick: () => this.setQty(p.id, qty - 1), "aria-label": "One fewer" }, qty === 1 ? "🗑" : "−"),
                   h("span", {}, qty),

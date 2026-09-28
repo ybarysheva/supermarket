@@ -23,6 +23,25 @@ const p = await openPage({ width: 1280, height: 800 });
 t.check("starts in 3D at the entrance", await until(() => store(p, (s) => s.view === "walk" && s.walker.node.id === "entrance")));
 t.check("shows where you are", /Entrance/.test(await p.locator(".sm-w-loc").textContent()));
 
+// Watch every search the store makes: how many are waiting at once, and in
+// what order they were asked for.
+await p.evaluate(() => {
+  const a = window.Supermarket.current().adapter;
+  const orig = a.search.bind(a);
+  window.searchLog = { inFlight: 0, max: 0, order: [] };
+  a.search = async (q) => {
+    const log = window.searchLog;
+    log.order.push(q);
+    log.max = Math.max(log.max, ++log.inFlight);
+    try {
+      return await orig(q);
+    } finally {
+      log.inFlight--;
+    }
+  };
+});
+t.check("a shelf waiting on the store shows it's being stocked", await until(() => store(p, (s) => s.walker.bays.some((b) => b.state === "loading" && b.placeholder))));
+
 await p.locator(".sm-ask input").fill("peanut butter");
 await p.locator(".sm-ask button").click();
 await arrived(p);
@@ -53,18 +72,21 @@ const prevented = (init) =>
 t.check("arrow keys turn you", await prevented({ key: "ArrowLeft" }));
 t.check("Ctrl/Cmd shortcuts reach the browser", !(await prevented({ key: "d", ctrlKey: true })) && !(await prevented({ key: "w", metaKey: true })));
 
-// Idle: nothing should be drawn while standing still.
+// Idle: once nearby shelves have finished stocking, standing still draws
+// nothing. Count frames in one-second windows until one is quiet.
 const frames = await p.evaluate(async () => {
   const w = window.Supermarket.current().walker;
-  // Let any turn or pending photos settle first.
-  for (let i = 0; i < 40 && (w.move || w.yawTarget != null || w.dirty); i++) await new Promise((r) => setTimeout(r, 250));
-  await new Promise((r) => setTimeout(r, 1500));
   let n = 0;
   const orig = w.renderer.render.bind(w.renderer);
   w.renderer.render = (...a) => (n++, orig(...a));
-  await new Promise((r) => setTimeout(r, 1000));
+  let last = -1;
+  for (let i = 0; i < 30 && last !== 0; i++) {
+    n = 0;
+    await new Promise((r) => setTimeout(r, 1000));
+    last = n;
+  }
   w.renderer.render = orig;
-  return n;
+  return last;
 });
 t.check("doesn't redraw while you stand still", frames === 0, frames);
 
@@ -76,9 +98,15 @@ t.check("the + on a price tag adds one", (await p.locator(".sm-cart-count").text
 await p.locator("button", { hasText: "Walk here in 3D" }).click();
 t.check("and you can walk back in", await until(() => store(p, (s) => s.view === "walk")));
 
-// Walking far away empties the shelves behind you.
-await p.locator(".sm-ask input").fill("milk");
-await p.locator(".sm-ask button").click();
+// Walking far away empties the shelves behind you, and the shelf you asked
+// for is fetched before the ones you pass on the way.
+// (Asked from script so "the next search" is measured from the exact moment.)
+const before = await p.evaluate(() => {
+  window.Supermarket.current().ask("milk");
+  return window.searchLog.order.length;
+});
+const next = await until(() => p.evaluate((n) => window.searchLog.order[n], before));
+t.check("the shelf you asked for is fetched first", next === "milk gallon", next);
 await arrived(p);
 const stocked = await until(() =>
   store(p, (s) => {
@@ -87,6 +115,9 @@ const stocked = await until(() =>
   })
 );
 t.check("empties shelves you've walked away from", stocked === "emptied");
+
+const maxWaiting = await p.evaluate(() => window.searchLog.max);
+t.check("never more than two shelves wait on the store at once", maxWaiting <= 2, maxWaiting);
 
 // Shopping list: sorted, located, ticked off by the cart.
 await p.locator("button", { hasText: "📝 List" }).click();

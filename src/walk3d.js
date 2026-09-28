@@ -24,6 +24,7 @@
   const PX_PER_M = 700; // price tag text resolution
   const STOCK_RADIUS = 10; // stock shelves within this distance…
   const UNSTOCK_RADIUS = 24; // …and empty them again past this one, to save memory
+  const MAX_STOCKING = 2; // shelves waiting on the store at once (the adapter's limit too)
 
   const C = {
     floorA: "#f2f2ed",
@@ -41,6 +42,7 @@
     cold: "#1f5a8a",
     accent: 0xe2462f,
     checkout: 0x33413b,
+    cardboard: 0xc9a46b,
   };
 
   const supported = () => {
@@ -643,35 +645,123 @@
 
     // ---- stocking shelves --------------------------------------------------
 
+    // Stocking is a queue with a short front: only MAX_STOCKING shelves wait
+    // on the store at a time, and each time a slot frees up it goes to the
+    // shelf that matters most right now. Shelves the store has already
+    // answered for are filled straight away, without taking a slot.
     stockNearby() {
-      const near = [];
+      // While walking somewhere, get the destination ready rather than the
+      // shelves you're passing on the way.
+      const at = this.move ? this.move.target : this.pos;
+      const look = this.move?.lookAt ? { x: this.move.lookAt.x - at.x, z: this.move.lookAt.z - at.z } : this.lookDir();
+      const here = this.move ? this.move.target : this.node;
+      const lookLen = Math.hypot(look.x, look.z) || 1;
+      const wanted = [];
+      let busy = 0;
       for (const b of this.bays) {
-        const d = Math.hypot(b.fx - this.pos.x, b.fz - this.pos.z);
-        if (b.state === "empty" && d < STOCK_RADIUS) near.push([d, b]);
-        else if (b.state !== "empty" && d > UNSTOCK_RADIUS) this.unstock(b);
+        const d = Math.hypot(b.fx - at.x, b.fz - at.z);
+        const dHere = Math.hypot(b.fx - this.pos.x, b.fz - this.pos.z);
+        if (b.state !== "empty" && dHere > UNSTOCK_RADIUS && d > UNSTOCK_RADIUS) this.unstock(b);
+        else if (b.state === "loading" && !this.isShelfReady(b)) busy++;
+        else if ((b.state === "empty" || b.state === "queued") && d < STOCK_RADIUS) {
+          // Shelves in front of you come first; then the nearest.
+          const facing = ((b.x - at.x) * look.x + (b.z - at.z) * look.z) / (lookLen * (Math.hypot(b.x - at.x, b.z - at.z) || 1));
+          // Shelves in the next aisle are close as the crow flies but
+          // behind the shelving, so your own aisle goes first.
+          const otherAisle = here.zone === "aisle" && b.corridor !== here.corridor ? 8 : 0;
+          wanted.push([d - facing * 4 + otherAisle, b]);
+        }
       }
-      near.sort((a, b) => a[0] - b[0]);
-      for (const [, b] of near) this.stock(b);
+      wanted.sort((a, b) => a[0] - b[0]);
+      for (const [, b] of wanted) {
+        if (this.isShelfReady(b)) this.stock(b);
+        else if (busy < MAX_STOCKING) {
+          this.stock(b);
+          busy++;
+        } else if (b.state === "empty") this.queue(b);
+      }
+    }
+
+    // Waiting its turn: shows the "stocking" boxes right away, so no nearby
+    // shelf ever looks empty just because the store is slow.
+    queue(bay) {
+      this.prepareBay(bay);
+      bay.state = "queued";
+      bay.token = null;
+      this.placeholder(bay);
+    }
+
+    prepareBay(bay) {
+      if (bay.stocked) return;
+      bay.stocked = new THREE.Group();
+      bay.group.add(bay.stocked);
+      bay.items = [];
+      bay.imageUrls = [];
+    }
+
+    isShelfReady(bay) {
+      const s = this.store.shelves.get(bay.section.query);
+      return !!s && s.status === "ready";
     }
 
     // Everything put on a bay's shelves lives in bay.stocked, so emptying
     // the bay is one remove plus freeing what it used.
     stock(bay) {
+      this.prepareBay(bay);
       bay.state = "loading";
-      bay.stocked = new THREE.Group();
-      bay.group.add(bay.stocked);
-      bay.items = [];
-      bay.imageUrls = [];
       const token = (bay.token = {});
       const s = this.store.shelf(bay.section.query);
       const done = () => {
         if (this.destroyed || bay.token !== token) return;
+        this.clearPlaceholder(bay);
         if (s.status === "ready") this.fill(bay, s.products);
         else this.shelfNote(bay, "Couldn't stock this shelf — click to try again", true);
         this.invalidate();
       };
-      if (s.status === "loading") s.promise.then(done);
-      else done();
+      if (s.status === "loading") {
+        if (!bay.placeholder) this.placeholder(bay);
+        s.promise.then(done);
+      } else done();
+    }
+
+    // While a shelf waits on the store: cardboard boxes and a sign, so it
+    // doesn't look like the shelf is simply empty.
+    placeholder(bay) {
+      const g = new THREE.Group();
+      const n = Math.max(2, Math.floor(bay.w / 0.55));
+      for (const y of BOARDS) {
+        for (let i = 0; i < n; i++) {
+          const x = -bay.w / 2 + ((i + 0.5) * bay.w) / n;
+          block(g, C.cardboard, 0.34, 0.22, 0.3, x, y + 0.11, FACE_D / 2);
+        }
+      }
+      if (!this.stockingTex) {
+        this.stockingTex = canvasTexture(1024, 160, (c, w, h) => {
+          c.fillStyle = "#fff8d6";
+          c.fillRect(0, 0, w, h);
+          c.fillStyle = "#1d2320";
+          c.textAlign = "center";
+          c.textBaseline = "middle";
+          c.fillText(fit(c, "Stocking this shelf…", w - 40, 64, 800), w / 2, h / 2 + 2);
+        });
+        this.stockingTex.userData.shared = true;
+      }
+      const sign = new THREE.Mesh(
+        new THREE.PlaneGeometry(Math.min(bay.w * 0.8, 1.2), 0.19),
+        new THREE.MeshBasicMaterial({ map: this.stockingTex, toneMapped: false })
+      );
+      sign.position.set(0, 1.02, FACE_D + 0.01);
+      g.add(sign);
+      bay.placeholder = g;
+      bay.stocked.add(g);
+      this.invalidate();
+    }
+
+    clearPlaceholder(bay) {
+      if (!bay.placeholder) return;
+      bay.stocked.remove(bay.placeholder);
+      disposeTree(bay.placeholder, unitBox);
+      bay.placeholder = null;
     }
 
     unstock(bay) {
@@ -683,6 +773,7 @@
       disposeTree(bay.stocked, unitBox);
       for (const url of bay.imageUrls) releaseTexture(url);
       bay.stocked = null;
+      bay.placeholder = null;
       bay.items = [];
       bay.imageUrls = [];
       this.invalidate();
@@ -1410,6 +1501,7 @@
       for (const m of matCache.values()) m.dispose();
       matCache.clear();
       releaseAllTextures();
+      if (this.stockingTex) this.stockingTex.dispose();
       this.renderer.dispose();
       // Browsers allow only a handful of live WebGL contexts per page, so
       // give this one back now rather than whenever it's garbage collected.

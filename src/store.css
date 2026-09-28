@@ -1315,13 +1315,38 @@ button.sm-door-mat {
 }
 
 .sm-failed {
+  list-style: none;
   margin: 0;
-  padding-left: 18px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sm-failed li {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
 }
 
 .sm-failed small {
   display: block;
   color: var(--ink-soft);
+}
+
+.sm-remove {
+  flex: 0 0 auto;
+  font-size: 14px;
+  padding: 4px 12px;
+}
+
+.sm-manual {
+  color: var(--accent) !important;
+}
+
+.sm-manual a {
+  color: inherit;
 }
 
 .sm-failed a {
