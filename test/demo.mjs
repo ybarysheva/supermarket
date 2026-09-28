@@ -81,11 +81,20 @@ const full = await until(() =>
 t.check("the shelf you're at fills up past the first page", full && full.items > 24, full);
 t.check("one of each product, best sellers first", full && full.unique === full.items && full.copies === 1 && full.first, full);
 t.check("a shelf with more than fits gets a More tag", full && full.total > full.cap && full.more, full);
+const blocks = await store(p, (s) => {
+  const bay = s.walker.bays.find((b) => b.section.name === "Peanut Butter & Spreads");
+  const runs = [];
+  for (const it of bay.items) if (runs[runs.length - 1] !== it.p.brand) runs.push(it.p.brand);
+  const big = new Set(bay.items.map((it) => it.p.brand).filter((b, i, all) => all.indexOf(b) !== all.lastIndexOf(b)));
+  return { runs, big: [...big], firstAtEye: bay.items[0].row === bay.fixture.rows[0] };
+});
+t.check("each brand stands together in one block", blocks.big.every((b) => blocks.runs.filter((r) => r === b).length === 1) && blocks.big.length > 1, blocks);
+t.check("a brand's best seller is at eye level", blocks.firstAtEye);
 const paged = await store(p, (s) => {
   const b = s.walker.bays.find((x) => x.section.name === "Peanut Butter & Spreads");
   const st = s.shelfState(b.section);
   s.walker.nextPage(b);
-  return { offset: b.offset, cap: b.capacity, first: b.items[0]?.p.id, expect: st.products[b.capacity]?.id };
+  return { offset: b.offset, cap: b.capacity, first: b.items[0]?.p.id, expect: window.Supermarket.byBrand(st.products)[b.capacity]?.id };
 });
 t.check("More puts up the next products", paged.offset === paged.cap && paged.first === paged.expect, paged);
 const wrapped = await until(() =>

@@ -138,7 +138,8 @@
     ["popsicle|ice pops", "🍭"], ["cones|bars", "🍦"], ["kefir|cottage", "🥛"], ["biscuits", "🥐"], ["kombucha|cold brew|chilled", "🧋"],
   ];
 
-  const VARIANTS = ["", "Organic ", "Family-size ", "Demo Farms ", "Premium ", "Value ", "Local ", "Snack-size ", "Classic ", "Reduced-sugar ", "Store-brand ", "Imported "];
+  const VARIANTS = ["", "Organic ", "Family-size ", "Farmhouse ", "Premium ", "Value ", "Local ", "Snack-size ", "Classic ", "Reduced-sugar ", "Store-brand ", "Imported "];
+  const BRANDS = ["Demo Farms", "Happy Pantry", "Sunny Acres", "Blue Ribbon", "Golden Hill", "Store Brand"];
   const PAGE = 24; // like Amazon, 24 products a page
   const MAX = 60; // products in one category
   const title = (w) => w.charAt(0).toUpperCase() + w.slice(1);
@@ -156,7 +157,10 @@
     const names = [];
     for (const v of VARIANTS) for (const b of base) if (names.length < MAX) names.push(v + b);
     const total = names.length;
-    const products = names.slice((n - 1) * PAGE, n * PAGE).map((name) => {
+    // Made-up brands, so shelves show brand blocks like a real store's.
+    const products = names.slice((n - 1) * PAGE, n * PAGE).map((plain) => {
+      const brand = BRANDS[Math.floor(hash(plain + "brand") * BRANDS.length)];
+      const name = `${brand} ${plain}`;
       const r = hash(name);
       const price = Math.round((1 + r * 11) * 100) / 100 - 0.01;
       const unit = UNITS[Math.floor(hash(name + "u") * UNITS.length)];
@@ -169,6 +173,7 @@
         image: emojiImage(emoji),
         url: "#",
         addForm: null,
+        brand,
       };
     });
     const result = { products, total, next: n * PAGE < total ? { page: n + 1 } : null };

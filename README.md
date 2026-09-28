@@ -106,7 +106,10 @@ Only the shelves you walk past get loaded, and at most two searches go to
 Amazon at a time, so Amazon doesn't think you're a bot.
 
 Shelves are stocked like a real store's: one of each product, side by side
-at real spacing, the store's best sellers at eye level. Amazon sends 24
+at real spacing, each brand together in its own block (reading down the
+shelves, its best sellers at eye level), the most popular brands first
+and the store's own brand next to the leader. The brand comes from the
+Brands list on Amazon's search pages, or the product name. Amazon sends 24
 products at a time, so while you stand at a shelf it keeps fetching the
 next 24 until the shelf is full or the category runs out, and the rest of
 the shelf stays empty until then. If a category has more products than

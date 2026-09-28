@@ -171,6 +171,11 @@
       });
       if (products.length >= MAX_PER_SECTION) break;
     }
+    // The category's brands, from the sidebar's Brands filter.
+    const brands = [...doc.querySelectorAll('[id*="brandsRefinements"] li')]
+      .map((li) => text(li.querySelector(".a-size-base.a-color-base") || li))
+      .filter((b) => b && b.length < 40 && !/^see (more|all)|^any brand/i.test(b));
+    for (const p of products) p.brand = S.brandOf ? S.brandOf(p.name, brands) : "";
     const total = totalOf(doc);
     const next = doc.querySelector(".s-pagination-next");
     const more = next ? !next.matches(".s-pagination-disabled, [aria-disabled='true']") : total != null && total > cardsBefore(doc, cards.length);

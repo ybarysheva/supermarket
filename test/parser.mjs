@@ -108,6 +108,17 @@ const result = await page.evaluate(async ({ html, realHtml, barHtml }) => {
   const noNav = S.adapters._parseAmazonPage(bar("1-24 of 119 results for", ""), "https://www.amazon.com");
   const paging = { page1, pageLast, noNav };
 
+  // Brands: from the sidebar's Brands filter, or the name.
+  const sidebar = `<div id="brandsRefinements"><ul><li><span class="a-size-base a-color-base">Justin's Nut Butter</span></li><li><span class="a-size-base a-color-base">365 by Whole Foods Market</span></li><li><span class="a-size-base a-color-base">Barney Butter</span></li></ul></div>`;
+  const cardOf = (asin, name) => `<div data-component-type="s-search-result" data-asin="${asin}"><h2>${name}</h2></div>`;
+  const branded = S.adapters._parseAmazonPage(sidebar + cardOf("B01", "Justins, Almond Butter Squeeze Pack") + cardOf("B02", "365 by Whole Foods Market, Organic Creamy Almond Butter") + cardOf("B03", "Barney Butter Almond Butter, Smooth"), "https://www.amazon.com").products.map((p) => p.brand);
+  const guessed = ["Barilla Rigatoni Pasta, 16 oz", "De Cecco Farfalle No. 93", "365 by Whole Foods Market, Penne"].map((n) => S.brandOf(n));
+  const order = S.byBrand([
+    { id: 1, name: "Barilla Penne" }, { id: 2, name: "Rao's Spaghetti" }, { id: 3, name: "De Cecco Fusilli" }, { id: 4, name: "Barilla Rotini" },
+    { id: 5, name: "365 by Whole Foods Market, Shells" }, { id: 6, name: "De Cecco Penne" }, { id: 7, name: "365 by Whole Foods Market, Elbows" },
+  ]).map((p) => p.id);
+  const brands = { branded, guessed, order };
+
   // A category shelf shows everything in its category.
   const card = '<div data-component-type="s-search-result" data-asin="B0NUTBUT01"><h2>Almond Butter</h2></div>';
   const asked = [];
@@ -118,7 +129,7 @@ const result = await page.evaluate(async ({ html, realHtml, barHtml }) => {
   };
   const browsed = await S.adapters.fresh().searchShelf(shelf("Nut & Seed Butters"));
   const fallback = { names: browsed.products.map((p) => p.name), asked };
-  return { fallback, paging, products, captcha, sent, added, noForm, cartUrl: fresh.cartUrl(), retried, refreshed, signedOut, evil, realProducts, departments, subs, layout };
+  return { brands, fallback, paging, products, captcha, sent, added, noForm, cartUrl: fresh.cartUrl(), retried, refreshed, signedOut, evil, realProducts, departments, subs, layout };
 }, { html: fixture, realHtml: real, barHtml: bar });
 await browser.close();
 
@@ -140,6 +151,9 @@ const checks = [
   ["says so when you're signed out", /signed out/.test(result.signedOut || "")],
   ["reads how many results there are in all", result.paging.page1.total === 1000 && result.paging.pageLast.total === 119],
   ["a category shelf shows everything in its category", result.fallback.names.join() === "Almond Butter" && result.fallback.asked.join() === "|n:s0", result.fallback],
+  ["brands: read from the sidebar's brand list", result.brands.branded.join("|") === "Justin's Nut Butter|365 by Whole Foods Market|Barney Butter", result.brands.branded],
+  ["brands: guessed from the name when there's no list", result.brands.guessed.join("|") === "Barilla|De Cecco|365", result.brands.guessed],
+  ["brands: kept together, the store brand beside the best seller, one-offs last", result.brands.order.join() === "1,4,5,7,3,6,2", result.brands.order],
   ["knows when there's another page", result.paging.page1.more && !result.paging.pageLast.more && result.paging.noNav.more],
   ["drops javascript: links", result.evil.url === "https://www.amazon.com/dp/B0EVIL" && result.evil.image === null],
 ];
