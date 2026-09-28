@@ -93,3 +93,30 @@ More to explore.
   are script-driven (no form to post), so they're for finding categories,
   not for stocking shelves. Shelves use search results limited to a
   category instead; to confirm with a saved search results page.
+
+## What Amazon Fresh search looks like (from a saved search page)
+
+- Search: `/s?k=<words>&i=amazonfresh`. 24 products per page, and the page
+  says the total ("1-24 of 119 results"). `&page=N` for more.
+- Every sidebar filter is a search limited by category IDs in `rh`:
+  `rh=n:10329849011` is all of Amazon Fresh, and adding a department or
+  subcategory narrows it (`rh=n:10329849011,n:18787303011` = Pantry
+  Staples). Keywords and categories combine, so a shelf can be "apples
+  within Fresh Fruit".
+- Other filters in the same `rh` list, useful later: brand (`p_123:`),
+  price (`p_36:`), dietary (Organic, Gluten Free, Vegan, Kosher, Keto…),
+  SNAP EBT eligible, deals.
+- Product cards match what the parser reads. Add-to-cart forms post to
+  `/cart/add-to-cart/local-market/<almBrandId>/` with a token, the product,
+  its offer and a quantity. Unit prices are written "($1.56/ounce)" with the
+  price repeated for screen readers. `test/amazon-fresh-search.html` holds
+  scrubbed cards from this page for the parser tests.
+
+## Phase 2, concretely
+
+1. On first open, read each department page's subcategory bar (about 16
+   pages, cached for a week) to learn the store's category tree.
+2. Match each subcategory to our categories by name ("where's the…" does
+   this already); keep a small hand-made table for the ones it gets wrong.
+3. Each shelf searches its keywords within its matched category. Anything
+   in a category that no shelf claims goes to More to explore.

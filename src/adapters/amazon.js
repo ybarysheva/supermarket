@@ -111,6 +111,18 @@
     return action ? { action, fields } : null;
   }
 
+  // "($1.56/ounce)": Amazon repeats the price inside for screen readers, so
+  // read the number from its price element and the unit from the text.
+  function unitPriceOf(card) {
+    for (const el of card.querySelectorAll(".a-color-secondary")) {
+      const unit = text(el).match(/\/\s*([A-Za-z][A-Za-z .]{0,20}?)\s*\)/);
+      const price = el.querySelector(".a-price .a-offscreen");
+      if (unit && price) return `${text(price)}/${unit[1].trim()}`;
+    }
+    const plain = text(card).match(/\((\$[\d.,]+\s*\/\s*[^)]{1,24})\)/);
+    return plain ? plain[1].replace(/\s+/g, "") : "";
+  }
+
   function parseResults(html, base) {
     const doc = new DOMParser().parseFromString(html, "text/html");
     if (doc.querySelector('form[action*="validateCaptcha"]')) {
@@ -130,7 +142,6 @@
 
       const priceEl = card.querySelector(".a-price:not(.a-text-price) .a-offscreen");
       const priceText = text(priceEl);
-      const unitMatch = text(card).match(/\((\$[\d.,]+\s*\/\s*[^)]{1,24})\)/);
       const img = card.querySelector("img.s-image");
       const link = card.querySelector('a[href*="/dp/"]') || card.querySelector("h2 a");
 
@@ -139,7 +150,7 @@
         name,
         price: parsePrice(priceText),
         priceText: priceText || "",
-        unitPrice: unitMatch ? unitMatch[1].replace(/\s+/g, "") : "",
+        unitPrice: unitPriceOf(card),
         image: img ? webUrl(img.getAttribute("src"), base) : null,
         url: (link && webUrl(link.getAttribute("href"), base)) || new URL(`/dp/${encodeURIComponent(asin)}`, base).href,
         addForm: readAddForm(card, base),

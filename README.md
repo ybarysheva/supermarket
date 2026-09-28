@@ -161,7 +161,8 @@ npm test
 The tests run headless Chromium:
 
 - `test/parser.mjs`: the Amazon page parser and add-to-cart requests,
-  against `test/amazon-fixture.html`.
+  against `test/amazon-fixture.html` and product cards from a real Amazon
+  Fresh search (`test/amazon-fresh-search.html`, scrubbed).
 - `test/demo.mjs`: walks through the playground on desktop and phone sizes
   (asking, picking up, the list, checkout, emptying far shelves, idle
   drawing, falling back when 3D dies, reduced motion).
