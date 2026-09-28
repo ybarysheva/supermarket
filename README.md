@@ -110,6 +110,21 @@ shelves in the **More to explore** aisle, so every product has a place.
 Only the shelves you walk past get loaded, and at most two searches go to
 Amazon at a time, so Amazon doesn't think you're a bot.
 
+Shelves are stocked like a real store's: one of each product, side by side
+at real spacing, the store's best sellers at eye level. Amazon sends 24
+products at a time, so while you stand at a shelf it keeps fetching the
+next 24 until the shelf is full or the category runs out, and the rest of
+the shelf stays empty until then. If a category has more products than
+its shelf holds, a yellow **More ▸** tag on the shelf puts up the next
+ones (and goes back to the first after the last). In the flat view it's
+a **More from this shelf** button.
+
+At checkout, after putting everything in your Amazon cart, the extension
+reads the cart back to check it's all there (Amazon sometimes quietly
+drops an item, for example when the saved Add button has expired). Any
+missing item is tried once more with a fresh Add button, and anything
+still missing is listed for you to add on its page.
+
 ```
 src/
   layout.js          our categories and the floor plan: departments, aisles, sections
@@ -131,7 +146,10 @@ playground/          the demo store; open index.html in a browser
 ### Adding another store (e.g. NetCost)
 
 A store is an *adapter* with three functions: `search(query)`,
-`addToCart(product, qty)` and `cartUrl()`. See `src/adapters/amazon.js`.
+`addToCart(product, qty)` and `cartUrl()`. Optionally,
+`searchShelf(section, place, cursor)` fills a shelf a page at a time
+(returning `{ products, total, next }`), and `missingFromCart(ids)` checks
+the cart after checkout. See `src/adapters/amazon.js`.
 To add NetCost Market, you would write `src/adapters/netcost.js`, add its
 site to `manifest.json`, and list it in `content.js`. You could also give it
 its own `layout.js` so the aisles match the real store.

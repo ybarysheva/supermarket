@@ -93,7 +93,12 @@ const result = await page.evaluate(async ({ html, realHtml, barHtml }) => {
   };
   const leftover = C.unclaimed(tree, S.allPlaces()).map((c) => c.name);
 
-  return { products, captcha, sent, added, noForm, cartUrl: fresh.cartUrl(), retried, refreshed, signedOut, evil, realProducts, departments, subs, mapping, leftover };
+  const bar = (t, next) => `<div data-component-type="s-result-info-bar"><h1><span>${t}</span></h1></div>${next}`;
+  const page1 = S.adapters._parseAmazonPage(bar("1-24 of over 1,000 results for", '<a class="s-pagination-next" href="?page=2">Next</a>'), "https://www.amazon.com");
+  const pageLast = S.adapters._parseAmazonPage(bar("97-119 of 119 results for", '<span class="s-pagination-next s-pagination-disabled">Next</span>'), "https://www.amazon.com");
+  const noNav = S.adapters._parseAmazonPage(bar("1-24 of 119 results for", ""), "https://www.amazon.com");
+  const paging = { page1, pageLast, noNav };
+  return { paging, products, captcha, sent, added, noForm, cartUrl: fresh.cartUrl(), retried, refreshed, signedOut, evil, realProducts, departments, subs, mapping, leftover };
 }, { html: fixture, realHtml: real, barHtml: bar });
 await browser.close();
 
@@ -113,6 +118,8 @@ const checks = [
   ["links to the Fresh cart", result.cartUrl.includes("almBrandId=QW1hem9uIEZyZXNo")],
   ["retries an expired add form with a fresh one", result.refreshed.ok && result.retried.join(",") === "POST /cart/add-to-cart/ref=fresh_atc,GET /s,POST /cart/add-to-cart/ref=fresh_atc"],
   ["says so when you're signed out", /signed out/.test(result.signedOut || "")],
+  ["reads how many results there are in all", result.paging.page1.total === 1000 && result.paging.pageLast.total === 119],
+  ["knows when there's another page", result.paging.page1.more && !result.paging.pageLast.more && result.paging.noNav.more],
   ["drops javascript: links", result.evil.url === "https://www.amazon.com/dp/B0EVIL" && result.evil.image === null],
 ];
 const rp = result.realProducts;

@@ -23,6 +23,8 @@
   const STOCK_RADIUS = 10; // stock shelves within this distance…
   const UNSTOCK_RADIUS = 24; // …and empty them again past this one, to save memory
   const MAX_STOCKING = 2; // shelf requests queued at once (the store lets two out at a time)
+  const SLOT = 0.2; // shelf space per product, as in a real store
+  const CRATE_SLOT = 0.3; // per crate of loose produce
 
   const C = {
     floorA: "#f2f2ed",
@@ -785,6 +787,16 @@
         }
       }
       wanted.sort((a, b) => a[0] - b[0]);
+
+      // Standing at a shelf with room for more: its next page goes first,
+      // then the shelves around you.
+      if (!this.move && busy < MAX_STOCKING) {
+        const bay = this.bayInView();
+        if (bay && this.wantsMore(bay)) {
+          this.loadMore(bay);
+          busy++;
+        }
+      }
       for (const [, b] of wanted) {
         if (this.isShelfReady(b)) this.stock(b);
         else if (busy < MAX_STOCKING) {
@@ -792,6 +804,73 @@
           busy++;
         } else if (b.state === "empty") this.queue(b);
       }
+    }
+
+    wantsMore(bay) {
+      const s = this.store.shelfState(bay.section);
+      return bay.state === "ready" && !!bay.capacity && !!s && !!s.next && !s.morePromise && !s.moreError && s.products.length < bay.offset + bay.capacity;
+    }
+
+    loadMore(bay) {
+      return this.store.more(bay.section, bay.place).then((s) => {
+        if (!this.destroyed && s && s.products !== bay.shownFrom) this.refill(bay);
+        return s;
+      });
+    }
+
+    // The "More" tag: the next products from this category, back to the
+    // first ones after the last.
+    nextPage(bay) {
+      const s = this.store.shelfState(bay.section);
+      if (!s || bay.state !== "ready" || !bay.capacity || s.morePromise) return;
+      const press = () => {
+        bay.moreTag?.material.color.setHex(0xcccccc); // pressed, while it loads
+        this.invalidate();
+      };
+      // Room left on this shelf: fill it first.
+      if (s.next && s.products.length < bay.offset + bay.capacity) {
+        press();
+        return this.loadMore(bay).then((st) => st?.moreError && this.refill(bay));
+      }
+      const next = bay.offset + bay.capacity;
+      if (next < s.products.length) {
+        bay.offset = next;
+        return this.refill(bay);
+      }
+      if (!s.next) {
+        bay.offset = 0;
+        return this.refill(bay);
+      }
+      press();
+      this.store.more(bay.section, bay.place).then((st) => {
+        if (this.destroyed || !st) return;
+        if (!st.moreError) bay.offset = next < st.products.length ? next : 0; // nothing more came: start over
+        this.refill(bay);
+      });
+    }
+
+    // Put a bay's products up again (a new page, more products): the new
+    // stock goes up before the old comes down, so nothing flickers, and
+    // photos both use are kept.
+    refill(bay) {
+      const s = this.store.shelfState(bay.section);
+      if (!bay.stocked || bay.state !== "ready" || !s || s.status !== "ready") return;
+      const old = bay.stocked;
+      const oldUrls = bay.imageUrls;
+      if (this.hoveredMat) {
+        this.hoveredMat = null;
+        this.hoveredProduct = null;
+      }
+      bay.stocked = null;
+      bay.placeholder = null;
+      bay.token = {};
+      this.prepareBay(bay);
+      this.fill(bay, s.products);
+      old.traverse((o) => this.pickables.delete(o));
+      bay.group.remove(old);
+      disposeTree(old, unitBox);
+      for (const url of oldUrls) releaseTexture(url);
+      this.invalidate();
     }
 
     // Waiting its turn: shows the "stocking" boxes right away, so no nearby
@@ -887,6 +966,7 @@
     unstock(bay) {
       bay.token = null;
       bay.state = "empty";
+      bay.moreTag = null;
       if (!bay.stocked) return;
       bay.stocked.traverse((o) => this.pickables.delete(o));
       bay.group.remove(bay.stocked);
@@ -924,20 +1004,27 @@
       bay.stocked.add(m);
     }
 
-    // Put products on the fixture's rows, eye-level rows first. Packages
-    // stand (or lean back, in counters and chests) in facings; loose
-    // produce is heaped in crates.
+    // Put products on the fixture's rows at real-store spacing, left to
+    // right, eye-level row first (the store lists its best sellers first).
+    // Rows that aren't needed yet stay empty, with room for more. A
+    // category bigger than the bay shows a "More" tag that puts up the
+    // next ones. Packages stand (or lean back, in counters and chests);
+    // loose produce is heaped in crates.
     fill(bay, products) {
       bay.state = "ready";
+      bay.shownFrom = products;
+      bay.offset = bay.offset || 0;
       if (!products.length) return this.shelfNote(bay, "Sold out today", false);
 
       const rows = bay.fixture.rows;
       const inner = bay.w - 0.1;
       const crates = rows[0].kind === "crate";
-      const fits = crates ? Math.max(1, Math.floor(inner / 0.3)) : Infinity;
-      const perRow = Math.min(fits, Math.ceil(products.length / rows.length));
-      const shown = products.slice(0, perRow * rows.length);
+      const perRow = Math.max(1, Math.floor(inner / (crates ? CRATE_SLOT : SLOT)));
       const slotW = inner / perRow;
+      bay.capacity = perRow * rows.length;
+      const s = this.store.shelfState(bay.section);
+      if (bay.offset >= products.length && !(s && s.next)) bay.offset = 0;
+      const shown = products.slice(bay.offset, bay.offset + bay.capacity);
       const tagRows = rows.map(() => []);
 
       shown.forEach((p, idx) => {
@@ -955,7 +1042,39 @@
         if (row.kind === "crate") tagRows[r].forEach((it) => this.stakeTag(bay, it));
         else this.tagStrip(bay, row, tagRows[r]);
       });
+      const total = s ? Math.max(s.total || 0, products.length) : products.length;
+      const more = bay.offset > 0 || products.length > bay.offset + bay.capacity || !!(s && s.next && (s.total == null || s.total > bay.capacity));
+      bay.moreTag = null;
+      if (more) this.moreTag(bay, `${bay.offset + 1}–${bay.offset + shown.length} of ${total}${s && s.next && !s.total ? "+" : ""}`);
       this.refreshBadges();
+    }
+
+    // A yellow tag at the right end of the eye-level shelf (or above a
+    // produce table): "More ▸", and which of the category's products are up.
+    moreTag(bay, range) {
+      const tex = canvasTexture(320, 112, (g, w, h) => {
+        g.fillStyle = "#ffd84a";
+        g.fillRect(0, 0, w, h);
+        g.fillStyle = "#1d2320";
+        g.textBaseline = "alphabetic";
+        g.textAlign = "center";
+        g.fillText(fit(g, "More ▸", w - 20, 50, 900), w / 2, h * 0.5);
+        g.fillText(fit(g, range, w - 20, 28, 600, 10), w / 2, h * 0.86);
+      });
+      const tw = 0.24;
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(tw, 0.084), new THREE.MeshBasicMaterial({ map: tex, toneMapped: false }));
+      const row = bay.fixture.rows[0];
+      if (row.kind === "crate") m.position.set(bay.w / 2 - tw / 2 - 0.05, this.noteY(bay), bay.fixture.depth + 0.04);
+      else {
+        // Hanging just under the eye-level price tags.
+        m.position.set(bay.w / 2 - tw / 2 - 0.05, row.tag.y - TAG_H / 2 - 0.045, row.tag.z + 0.006);
+        m.rotation.x = -row.tag.lean;
+      }
+      m.userData.more = bay;
+      m.userData.moreRange = range;
+      bay.stocked.add(m);
+      this.pickables.add(m);
+      bay.moreTag = m;
     }
 
     // Packages, side by side: wide slots get several facings of each.
@@ -1399,6 +1518,7 @@
         this.unstock(u.retry);
         return this.stock(u.retry);
       }
+      if (u.more) return this.nextPage(u.more);
       if (u.floor) {
         let best = null;
         let bestD = 3;
@@ -1448,6 +1568,8 @@
         text = ["Checkout lane", "Click to look in your cart and pay"];
       } else if (u.retry) {
         text = ["Try stocking this shelf again"];
+      } else if (u.more) {
+        text = ["More from this shelf", `Showing ${u.moreRange}`];
       }
       this.canvas.style.cursor = text ? "pointer" : u.floor ? "crosshair" : "grab";
       if (!text) return this.hideTip();
@@ -1492,9 +1614,13 @@
       let best = null;
       let bestScore = 0.5;
       for (const b of this.bays) {
-        const dx = b.x - this.pos.x;
-        const dz = b.z - this.pos.z;
-        const d = Math.hypot(dx, dz);
+        // Only shelves whose front faces you: the one behind the shelving
+        // you're looking at stands back to back with it, a few cm away.
+        const ry = b.group.rotation.y;
+        if ((this.pos.x - b.x) * Math.sin(ry) + (this.pos.z - b.z) * Math.cos(ry) <= 0) continue;
+        const dx = b.fx - this.pos.x;
+        const dz = b.fz - this.pos.z;
+        const d = Math.max(0.01, Math.hypot(dx, dz));
         if (d > 4.5) continue;
         const dot = (dx * look.x + dz * look.z) / d;
         const score = dot - d * 0.08;

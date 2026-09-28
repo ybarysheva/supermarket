@@ -103,10 +103,13 @@
       (f) => f.querySelector('input[name*="asin" i]') || /cart/i.test(f.getAttribute("action") || "")
     );
     if (!form) return null;
-    const fields = [...form.querySelectorAll("input[name]")]
-      .filter((i) => i.type !== "submit" && i.type !== "button")
-      .map((i) => [i.name, i.value]);
+    const inputs = [...form.querySelectorAll("input[name]")];
+    const fields = inputs.filter((i) => i.type !== "submit" && i.type !== "button").map((i) => [i.name, i.value]);
     if (!fields.length) return null;
+    // A browser sends the Add button's name too (submit.addToCart), and
+    // Amazon may ignore a post without it.
+    const submit = inputs.find((i) => i.type === "submit");
+    if (submit) fields.push([submit.name, submit.getAttribute("value") || "Submit"]);
     const action = webUrl(form.getAttribute("action") || "/cart/add-to-cart", base);
     return action ? { action, fields } : null;
   }
@@ -123,7 +126,18 @@
     return plain ? plain[1].replace(/\s+/g, "") : "";
   }
 
-  function parseResults(html, base) {
+  // "1-24 of 119 results for…" (or "of over 1,000"): how many there are in all.
+  function totalOf(doc) {
+    for (const el of doc.querySelectorAll('[data-component-type="s-result-info-bar"] span, h1 span, .s-breadcrumb span')) {
+      const m = text(el).match(/(?:^|\s)of\s+(?:over\s+)?([\d,]+)\s+results/i);
+      if (m) return Number(m[1].replace(/,/g, ""));
+    }
+    return null;
+  }
+
+  // One page of search results: { products, total, more }. `more`: there's
+  // another page after this one.
+  function parsePage(html, base) {
     const doc = new DOMParser().parseFromString(html, "text/html");
     if (doc.querySelector('form[action*="validateCaptcha"]')) {
       const err = new Error("Amazon wants to check you're human. Open any Amazon page, solve the check, then come back.");
@@ -157,8 +171,22 @@
       });
       if (products.length >= MAX_PER_SECTION) break;
     }
-    return products;
+    const total = totalOf(doc);
+    const next = doc.querySelector(".s-pagination-next");
+    const more = next ? !next.matches(".s-pagination-disabled, [aria-disabled='true']") : total != null && total > cardsBefore(doc, cards.length);
+    return { products, total, more };
   }
+
+  // How many results come before the end of this page ("25-48 of 119" → 48).
+  function cardsBefore(doc, count) {
+    for (const el of doc.querySelectorAll('[data-component-type="s-result-info-bar"] span, h1 span, .s-breadcrumb span')) {
+      const m = text(el).match(/(\d[\d,]*)\s*[-–]\s*(\d[\d,]*)\s+of/);
+      if (m) return Number(m[2].replace(/,/g, ""));
+    }
+    return count;
+  }
+
+  const parseResults = (html, base) => parsePage(html, base).products;
 
   // ---- the store's own categories ----------------------------------------
   //
@@ -357,21 +385,25 @@
     }
 
 
-    async function fetchResults(query, node) {
+    async function fetchResults(query, node, page = 1) {
       const url = new URL("/s", origin);
       if (query) url.searchParams.set("k", query);
       url.searchParams.set("i", store.searchIndex);
       if (node) url.searchParams.set("rh", `n:${node}`);
-      return parseResults(await fetchPage(url.href), origin);
+      if (page > 1) url.searchParams.set("page", String(page));
+      return parsePage(await fetchPage(url.href), origin);
     }
 
-    async function cachedResults(query, node) {
-      const key = `supermarket:${store.id}:${node || ""}:${query}`;
-      const cached = cacheGet(key);
-      if (cached) return cached;
-      const products = await fetchResults(query, node);
-      cacheSet(key, products);
-      return products;
+    // One page of a search, as { products, total, next }: `next` is where
+    // the page after it is, for searchShelf.
+    async function cachedResults(query, node, page = 1) {
+      const key = `supermarket:${store.id}:${node || ""}:${query}:${page}`;
+      let r = cacheGet(key);
+      if (!r) {
+        r = await fetchResults(query, node, page);
+        cacheSet(key, r);
+      }
+      return { products: r.products, total: r.total ?? null, next: r.more ? { node: node || null, page: page + 1 } : null };
     }
 
     async function postForm(form, qty) {
@@ -395,14 +427,16 @@
       tagline: store.tagline,
 
 
-      search(query) {
-        return cachedResults(query);
+      async search(query) {
+        return (await cachedResults(query)).products;
       },
 
       // A shelf's products: its words, within its category when we know it.
       // If a category turns out too narrow (under 4 products), widen to the
       // next one, then the whole store, so a wrong match never empties a shelf.
-      async searchShelf(section, place) {
+      // Returns { products, total, next }; pass `next` back for the page after.
+      async searchShelf(section, place, cursor) {
+        if (cursor) return cachedResults(section.query, cursor.node, cursor.page);
         let chain = [];
         try {
           chain = categoryChain(section, place, await ensureTreeFor(place));
@@ -410,8 +444,8 @@
           /* no categories: plain search */
         }
         for (const cat of chain) {
-          const products = await cachedResults(section.query, cat.node);
-          if (products.length >= 4 || !section.query) return products;
+          const r = await cachedResults(section.query, cat.node);
+          if (r.products.length >= 4 || !section.query) return r;
         }
         return cachedResults(section.query);
       },
@@ -433,19 +467,35 @@
       // The add form carries a one-time token that expires, and carts are
       // kept between visits. If the saved form fails (or there isn't one),
       // look the product up again for a fresh form and try once more.
-      async addToCart(product, qty) {
+      // `fresh`: don't trust the saved form, look it up again first.
+      async addToCart(product, qty, { fresh = false } = {}) {
         try {
-          if (product.addForm) {
+          if (product.addForm && !fresh) {
             const r = await postForm(product.addForm, qty);
             if (r.ok || r.final) return r;
           }
-          const fresh = (await fetchResults(product.id)).find((p) => p.id === product.id);
-          if (!fresh || !fresh.addForm) return { ok: false, message: "This one has to be added from its product page." };
-          product.addForm = fresh.addForm;
-          return await postForm(fresh.addForm, qty);
+          const found = (await fetchResults(product.id)).products.find((p) => p.id === product.id);
+          if (!found || !found.addForm) return { ok: false, message: "This one has to be added from its product page." };
+          product.addForm = found.addForm;
+          return await postForm(found.addForm, qty);
         } catch (e) {
           return { ok: false, message: e.message };
         }
+      },
+
+      // Amazon answers "OK" even when it quietly drops an item (an expired
+      // token, say), so after checkout read the cart back: which of these
+      // products aren't in it? null if the cart page can't be read.
+      async missingFromCart(ids) {
+        let html;
+        try {
+          html = await fetchPage(this.cartUrl());
+        } catch {
+          return null;
+        }
+        const listed = /data-asin="[A-Z0-9]+"/.test(html);
+        if (!listed && !/cart is empty/i.test(html)) return null;
+        return ids.filter((id) => !html.includes(`data-asin="${id}"`));
       },
 
       cartUrl() {
@@ -458,5 +508,6 @@
   S.adapters.fresh = () => makeAdapter(STORES.fresh);
   S.adapters.wholefoods = () => makeAdapter(STORES.wholefoods);
   S.adapters._parseAmazonResults = parseResults; // exposed for tests
+  S.adapters._parseAmazonPage = parsePage;
   S.adapters._amazonCategories = { parseDepartments, parseSubcategories, categoryFor, categoryChain, unclaimed };
 })();

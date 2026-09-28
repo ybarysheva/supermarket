@@ -230,23 +230,60 @@
 
     // ---- shelves -----------------------------------------------------------
 
-    // One shelf's products, fetched once per visit. Every request to the
-    // store (3D or flat view) goes through one queue that lets at most two
-    // out at a time, first come first served; the 3D view decides what
-    // joins the queue next.
+    // One shelf's products, fetched once per visit: the first page, then
+    // more pages as they're wanted (more()). Every request to the store (3D
+    // or flat view) goes through one queue that lets at most two out at a
+    // time, first come first served; the 3D view decides what joins the
+    // queue next.
+    //
+    // State: { status, products, total (null: unknown), next (where the
+    // next page is; null: that's all) }.
     shelf(section, place) {
       const key = shelfKey(section);
       let s = this.shelves.get(key);
       if (!s || s.status === "error") {
-        s = { status: "loading" };
-        const ask = () => (this.adapter.searchShelf ? this.adapter.searchShelf(section, place) : this.adapter.search(section.query));
-        s.promise = this.schedule(ask).then(
-          (products) => Object.assign(s, { status: "ready", products }),
+        s = { status: "loading", products: [], total: null, next: null };
+        s.promise = this.schedule(() => this.askShelf(section, place)).then(
+          (r) => Object.assign(s, { status: "ready" }, r),
           (error) => Object.assign(s, { status: "error", error })
         );
         this.shelves.set(key, s);
       }
       return s;
+    }
+
+    async askShelf(section, place, cursor) {
+      if (!this.adapter.searchShelf) return { products: await this.adapter.search(section.query), total: null, next: null };
+      const r = await this.adapter.searchShelf(section, place, cursor);
+      return Array.isArray(r) ? { products: r, total: null, next: null } : { products: r.products, total: r.total ?? null, next: r.next || null };
+    }
+
+    // The shelf's next page, added to what it has. Resolves with the shelf
+    // state; its `products` becomes a new array when anything was added.
+    more(section, place) {
+      const s = this.shelfState(section);
+      if (!s || s.status !== "ready" || !s.next) return Promise.resolve(s);
+      if (!s.morePromise) {
+        s.moreError = null;
+        s.morePromise = this.schedule(() => this.askShelf(section, place, s.next))
+          .then(
+            (r) => {
+              const have = new Set(s.products.map((p) => p.id));
+              const added = r.products.filter((p) => !have.has(p.id));
+              if (added.length) s.products = [...s.products, ...added];
+              s.total = r.total ?? s.total;
+              s.next = added.length ? r.next : null; // a page of repeats: that's all
+            },
+            (error) => {
+              s.moreError = error;
+            }
+          )
+          .then(() => {
+            s.morePromise = null;
+            return s;
+          });
+      }
+      return s.morePromise;
     }
 
     shelfState(section) {
@@ -361,15 +398,40 @@
       panel.replaceChildren(h("h2", {}, "Checkout lane"), status);
 
       const failed = [];
+      const fail = (it, message) => {
+        it.manual = message || "Add this one on its product page.";
+        failed.push({ ...it, message });
+      };
+      let added = [];
       for (let i = 0; i < items.length; i++) {
         status.textContent = `Scanning item ${i + 1} of ${items.length}: ${items[i].product.name}`;
         const r = await this.adapter.addToCart(items[i].product, items[i].qty);
-        if (r.ok) this.basket.delete(items[i].product.id);
-        else {
-          items[i].manual = r.message || "Add this one on its product page.";
-          failed.push({ ...items[i], message: r.message });
+        if (r.ok) added.push(items[i]);
+        else fail(items[i], r.message);
+      }
+
+      // Check the store's cart really has them. Anything missing is tried
+      // once more with a freshly looked-up Add button, then checked again.
+      if (added.length && this.adapter.missingFromCart) {
+        status.textContent = "Checking your cart…";
+        for (let round = 0; round < 2 && added.length; round++) {
+          const missing = await this.adapter.missingFromCart(added.map((it) => it.product.id));
+          if (!missing || !missing.length) break;
+          const retry = added.filter((it) => missing.includes(it.product.id));
+          added = added.filter((it) => !missing.includes(it.product.id));
+          for (const it of retry) {
+            if (round === 1) {
+              fail(it, `${this.adapter.name} didn't take this one. Add it on its page.`);
+              continue;
+            }
+            status.textContent = `Scanning again: ${it.product.name}`;
+            const r = await this.adapter.addToCart(it.product, it.qty, { fresh: true });
+            if (r.ok) added.push(it);
+            else fail(it, r.message);
+          }
         }
       }
+      for (const it of added) this.basket.delete(it.product.id);
       this.saveBasket();
       this.updateBadges();
 
@@ -617,7 +679,19 @@
       container.dataset.stocked = "1";
       const s = this.shelf(sec, this.place);
       const draw = () => {
-        if (s.status === "ready") container.replaceChildren(...this.renderShelves(s.products));
+        if (s.status === "ready") {
+          const more =
+            s.next &&
+            h("button", {
+              class: "sm-secondary sm-more",
+              onclick: (e) => {
+                e.currentTarget.disabled = true;
+                e.currentTarget.textContent = "Stocking…";
+                this.more(sec, this.place).then(() => container.isConnected && draw());
+              },
+            }, `More from this shelf (${s.products.length}${s.total ? ` of ${s.total}` : "+"})`);
+          container.replaceChildren(...this.renderShelves(s.products), ...[more].filter(Boolean));
+        }
         else if (s.status === "error") {
           container.replaceChildren(
             h("div", { class: "sm-out-of-stock" },
@@ -638,7 +712,7 @@
       if (!products.length) {
         return [h("div", { class: "sm-out-of-stock" }, h("strong", {}, "Empty shelf"), h("span", {}, "Nothing here right now — try asking at the top."))];
       }
-      const perRow = Math.max(2, Math.ceil(products.length / 3));
+      const perRow = Math.min(8, Math.max(2, Math.ceil(products.length / 3)));
       const rows = [];
       for (let i = 0; i < products.length; i += perRow) rows.push(products.slice(i, i + perRow));
       return rows.map((row) => h("div", { class: "sm-shelf" }, row.map((p) => this.renderItem(p))));

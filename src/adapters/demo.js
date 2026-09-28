@@ -138,20 +138,25 @@
     ["popsicle|ice pops", "🍭"], ["cones|bars", "🍦"], ["kefir|cottage", "🥛"], ["biscuits", "🥐"], ["kombucha|cold brew|chilled", "🧋"],
   ];
 
-  const VARIANTS = ["", "Organic ", "Family-size ", "Demo Farms ", "Premium ", "Value "];
+  const VARIANTS = ["", "Organic ", "Family-size ", "Demo Farms ", "Premium ", "Value ", "Local ", "Snack-size ", "Classic ", "Reduced-sugar ", "Store-brand ", "Imported "];
+  const PAGE = 24; // like Amazon, 24 products a page
+  const MAX = 60; // products in one category
   const title = (w) => w.charAt(0).toUpperCase() + w.slice(1);
 
-  function search(query) {
+  // One page of a category: { products, total, next }.
+  function page(query, n = 1) {
     const q = query.toLowerCase();
     // The longest matching keyword wins, so "frozen fruit berries" finds the
     // freezer and not the produce berries.
     const match = CATALOG.filter(([kw]) => q.includes(kw)).sort((a, b) => b[0].length - a[0].length)[0];
     const emoji = match ? match[1] : (EMOJI.find(([words]) => words.split("|").some((w) => q.includes(w))) || [0, "🛒"])[1];
     const base = match ? match.slice(2) : q.split(" ").filter((w) => w.length > 2).slice(0, 4).map(title);
-    // Enough products to fill a real-store shelf: each name in a few variants.
+    // Enough products for a real-store shelf and then some: each name in
+    // several variants.
     const names = [];
-    for (const v of VARIANTS) for (const n of base) if (names.length < 24) names.push(v + n);
-    const products = names.map((name) => {
+    for (const v of VARIANTS) for (const b of base) if (names.length < MAX) names.push(v + b);
+    const total = names.length;
+    const products = names.slice((n - 1) * PAGE, n * PAGE).map((name) => {
       const r = hash(name);
       const price = Math.round((1 + r * 11) * 100) / 100 - 0.01;
       const unit = UNITS[Math.floor(hash(name + "u") * UNITS.length)];
@@ -166,9 +171,12 @@
         addForm: null,
       };
     });
+    const result = { products, total, next: n * PAGE < total ? { page: n + 1 } : null };
     // Pretend the store is a little slow, like the real one.
-    return new Promise((resolve) => setTimeout(() => resolve(products), 150 + hash(query) * 350));
+    return new Promise((resolve) => setTimeout(() => resolve(result), 150 + hash(query + n) * 350));
   }
+
+  const search = async (query) => (await page(query)).products;
 
   S.adapters = S.adapters || {};
   S.adapters.demo = () => ({
@@ -176,6 +184,7 @@
     name: "Demo Market",
     tagline: "Practice store — nothing is really bought",
     search,
+    searchShelf: (section, place, cursor) => page(section.query || section.name, cursor ? cursor.page : 1),
     async addToCart() {
       return { ok: true };
     },

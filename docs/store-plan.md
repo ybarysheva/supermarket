@@ -59,7 +59,8 @@ More to explore.
 
 ## Every product, without a giant store
 
-- Real-store shelf density: a 1.2 m section holds 50–100 products.
+- Real-store shelf spacing: one of each product, about 20 cm each (30 cm
+  per produce crate), so a 1.2 m section with 5 shelves holds 25.
 - Fixed shelf space per category; if the store has more products than
   fit, the last section gets a "More →" tag that restocks with the next
   page while you stand there.
@@ -138,3 +139,24 @@ In `src/adapters/amazon.js`:
 
 If a match turns out wrong in real use, the fix is a keyword on our side or
 an entry in `DEPARTMENTS`, not a store-specific table.
+
+## Phase 3: full shelves (built)
+
+1. **Spacing**: every product gets a fixed slot (20 cm; 30 cm for a crate),
+   one of each, packed left to right starting at eye level. A bay holds
+   `slots per shelf × shelves`; shelves not needed yet stay empty.
+2. **Pages**: a shelf's first 24 products come as before. While you stand
+   at a shelf ("Looking at"), its next page is fetched before the shelves
+   around you, and then the next, until the bay is full or the category
+   runs out. Amazon: `&page=N`; the total comes from "1-24 of 119 results"
+   and the Next button says whether there's another page.
+3. **More ▸**: if a category has more products than its bay holds, a yellow
+   tag under the eye-level price tags shows which ones are up ("1–25 of
+   119") and puts up the next ones, back to the first after the last. The
+   new stock goes up before the old comes down, so nothing flickers. The
+   flat view has a "More from this shelf" button.
+4. **Looking at** only counts shelves whose front faces you (the shelf
+   behind the shelving you're facing no longer wins).
+5. **Checkout check**: Amazon can answer OK and still drop an item, so
+   checkout reads the cart back, retries missing items once with a freshly
+   looked-up Add button, and lists what's still missing.
