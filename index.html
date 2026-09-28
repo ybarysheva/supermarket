@@ -4,24 +4,44 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Supermarket Mode</title>
-  <style>body { margin: 0; background: #eef0ec; font-family: system-ui, sans-serif; }</style>
+  <!-- Placeholder until the real landing page. -->
+  <style>
+    :root { color-scheme: light; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px 16px;
+      box-sizing: border-box;
+      background: #eef0ec;
+      color: #1d2320;
+      font: 18px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    main { max-width: 34rem; }
+    h1 { margin: 0 0 8px; font-size: 2rem; line-height: 1.2; }
+    p { margin: 0 0 24px; color: #56605a; }
+    .actions { display: flex; flex-wrap: wrap; gap: 12px; }
+    a {
+      padding: 12px 20px;
+      border-radius: 999px;
+      font-weight: 700;
+      text-decoration: none;
+      border: 2px solid #1f6b45;
+      color: #1f6b45;
+    }
+    a.primary { background: #1f6b45; color: #fff; }
+    a:focus-visible { outline: 3px solid #ffd84a; outline-offset: 2px; }
+  </style>
 </head>
 <body>
-  <!-- A practice store with made-up products. Open this file in a browser. -->
-  <script src="src/layout.js"></script>
-  <script src="src/adapters/demo.js"></script>
-  <script src="src/vendor/three.min.js"></script>
-  <script src="src/ui.js"></script>
-  <script src="src/walk3d.js"></script>
-  <script>
-    Supermarket.open({
-      stores: ["demo"],
-      cssHref: "src/store.css",
-      onClose() {
-        document.body.innerHTML =
-          '<p style="padding:24px">You left the store. <a href="">Walk back in</a></p>';
-      },
-    });
-  </script>
+  <main>
+    <h1>🛒 Supermarket Mode</h1>
+    <p>Shop Amazon Fresh and Whole Foods by walking through a supermarket: aisles, shelves, price tags and a cart. A browser extension, coming soon.</p>
+    <div class="actions">
+      <a class="primary" href="playground/">Try the playground</a>
+      <a href="https://github.com/ybarysheva/supermarket">See it on GitHub</a>
+    </div>
+  </main>
 </body>
 </html>

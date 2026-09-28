@@ -6,7 +6,7 @@ import { launch, root, checker } from "./helpers.mjs";
 const fixture = readFileSync(root + "test/amazon-fixture.html", "utf8");
 const browser = await launch();
 const page = await browser.newPage();
-await page.goto("file://" + root + "index.html");
+await page.goto("file://" + root + "playground/index.html");
 await page.addScriptTag({ path: root + "src/adapters/amazon.js" });
 
 const result = await page.evaluate(async (html) => {
