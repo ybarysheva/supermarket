@@ -112,11 +112,29 @@ More to explore.
   price repeated for screen readers. `test/amazon-fresh-search.html` holds
   scrubbed cards from this page for the parser tests.
 
-## Phase 2, concretely
+## Phase 2: category shelves (built)
 
-1. On first open, read each department page's subcategory bar (about 16
-   pages, cached for a week) to learn the store's category tree.
-2. Match each subcategory to our categories by name ("where's the…" does
-   this already); keep a small hand-made table for the ones it gets wrong.
-3. Each shelf searches its keywords within its matched category. Anything
-   in a category that no shelf claims goes to More to explore.
+In `src/adapters/amazon.js`:
+
+1. **Departments** come from the browse bar on the store's front page
+   (`…_aislesNode__…` links, each with `data-browse-node-id`). If it can't
+   be read, Amazon Fresh's known list is used.
+2. **Subcategories** are read lazily: the first time a shelf in a place is
+   stocked, the department pages that place lives in are read
+   (`…_categoryNode__…` entries). Each page is read once, even when several
+   shelves need it at the same moment, and the tree is kept for a week.
+3. **Which departments a place lives in** is a short table (`DEPARTMENTS`):
+   produce → Produce, aisle 1 → Breakfast / Beverages / Pantry, and so on.
+   Departments that belong to one place entirely (Produce, Dairy, Frozen…)
+   are marked `whole`.
+4. **Matching**: each subcategory is scored against a shelf's name and
+   keywords (strong) and its side's label (weak); the best one wins.
+5. **Searching**: a shelf searches its words within its subcategory, then
+   its whole department (if `whole`), then all of the store, stopping at
+   the first that returns 4 or more products.
+6. **More to explore**: subcategories no shelf searches within get their
+   own shelves in the More to explore aisle (up to 16), filled by browsing
+   the category with no search words. This grows as departments are read.
+
+If a match turns out wrong in real use, the fix is a keyword on our side or
+an entry in `DEPARTMENTS`, not a store-specific table.

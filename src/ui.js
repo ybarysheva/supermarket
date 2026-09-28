@@ -29,6 +29,7 @@
   // searches (Amazon answers with a captcha), so walk the aisles politely.
   const MAX_REQUESTS = 2;
   const shelfKey = (section) => section.id || section.query;
+  const MAX_MORE = 16; // extra category shelves in More to explore
 
   const money = (n) => `$${n.toFixed(2)}`;
 
@@ -144,11 +145,25 @@
       this.adapter = S.adapters[id]();
       this.shelves.clear();
       this.basket = new Map(load(`supermarket:basket:${id}`, []).map((it) => [it.product.id, it]));
+      this.fillMoreToExplore();
       if (this.walker) this.walker.destroy();
       this.walker = null;
       // With 3D available you start at the entrance, looking into the store.
       this.view = this.use3d ? "walk" : "map";
       this.render();
+    }
+
+    // Categories this store has that none of our shelves cover get their own
+    // shelves in More to explore, so every product has a place. The store
+    // learns its categories as you shop, so this grows over the first visits.
+    fillMoreToExplore() {
+      const more = S.place("more");
+      if (!more) return;
+      const side = more.sides[more.sides.length - 1];
+      side.baseSections = side.baseSections || side.sections.slice();
+      side.sections = side.baseSections.slice();
+      const extra = this.adapter.moreSections ? this.adapter.moreSections(S.allPlaces()) : [];
+      side.sections.push(...extra.slice(0, MAX_MORE));
     }
 
     // Walk to a shelf: in 3D when we can, otherwise the flat shelf view.

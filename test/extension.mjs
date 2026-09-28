@@ -17,7 +17,16 @@ const t = checker("Extension on (fake) Amazon");
 const manifest = JSON.parse(readFileSync(root + "manifest.json", "utf8"));
 t.check("manifest.json has no Firefox-only settings", !manifest.background.scripts && !manifest.browser_specific_settings);
 const png = readFileSync(root + "icons/icon128.png");
-const seen = { searches: [], posts: [], images: 0, pages: [] };
+const seen = { searches: [], posts: [], images: 0, pages: [], departmentPages: [] };
+
+// The store front shows the browse bar with Amazon's departments; each
+// department page lists its subcategories (structure copied from a real page).
+const browseBar = readFileSync(root + "test/amazon-browse-bar.html", "utf8");
+const SUBS = { 18787303011: [["777", "Nut & Seed Butters"], ["778", "Pasta & Noodles"]] };
+const departmentPage = (node) =>
+  `<html><body>${(SUBS[node] || [])
+    .map(([n, name]) => `<a class="_browse-bar-widget_style_categoryNode__2uOzA" data-browse-node-id="${n}" data-node-link="/alm/category/?node=${n}"><div class="_browse-bar-widget_style_categoryFont__2zmt5">${name}</div></a>`)
+    .join("")}</body></html>`;
 
 // A search results page shaped like Amazon's, with made-up products.
 function resultsPage(query, index) {
@@ -59,7 +68,7 @@ await context.route("https://www.amazon.com/**", async (route) => {
   const u = new URL(req.url());
   seen.pages.push(`${req.method()} ${u.pathname}`);
   if (u.pathname === "/s") {
-    seen.searches.push({ k: u.searchParams.get("k"), i: u.searchParams.get("i") });
+    seen.searches.push({ k: u.searchParams.get("k"), i: u.searchParams.get("i"), rh: u.searchParams.get("rh") });
     return route.fulfill(html(resultsPage(u.searchParams.get("k"), u.searchParams.get("i"))));
   }
   if (u.pathname.startsWith("/cart/add-to-cart")) {
@@ -67,7 +76,11 @@ await context.route("https://www.amazon.com/**", async (route) => {
     return route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
   }
   if (u.pathname === "/cart/localmarket") return route.fulfill(html("<h1>Your Amazon Fresh cart</h1>"));
-  return route.fulfill(html("<h1>Amazon Fresh</h1><p>Groceries delivered.</p>"));
+  if (u.pathname === "/alm/category/") {
+    seen.departmentPages.push(u.searchParams.get("node"));
+    return route.fulfill(html(departmentPage(u.searchParams.get("node"))));
+  }
+  return route.fulfill(html(`<h1>Amazon Fresh</h1><p>Groceries delivered.</p>${browseBar}`));
 });
 // Refuse cross-site reads, as Amazon's image server may: WebGL can't use
 // these photos directly, so they must come through the extension's fetcher.
@@ -109,6 +122,9 @@ t.check("product photos come through the extension's photo fetcher", await until
 await page.locator(".sm-ask input").fill("peanut butter");
 await page.locator(".sm-ask button").click();
 t.check("asking searches for that shelf", await until(() => seen.searches.some((s) => /peanut butter/.test(s.k))));
+t.check("it learns the store's categories from its department pages", await until(() => seen.departmentPages.includes("18787303011")), seen.departmentPages);
+t.check("the shelf searches within its Amazon category", await until(() => seen.searches.some((s) => /peanut butter/.test(s.k) && s.rh === "n:777")), seen.searches.filter((s) => /peanut/.test(s.k)));
+t.check("each department page is read once", seen.departmentPages.filter((n) => n === "18787303011").length === 1, seen.departmentPages);
 await page.waitForTimeout(3000);
 await page.locator(".sm-w-tools button", { hasText: "Flat shelves" }).click();
 await until(() => page.locator(".sm-grab").count());
