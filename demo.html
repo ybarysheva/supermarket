@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Supermarket Mode</title>
+  <style>body { margin: 0; background: #eef0ec; font-family: system-ui, sans-serif; }</style>
+</head>
+<body>
+  <!-- A practice store with made-up products. Open this file in a browser. -->
+  <script src="src/layout.js"></script>
+  <script src="src/adapters/demo.js"></script>
+  <script src="src/ui.js"></script>
+  <script>
+    Supermarket.open({
+      stores: ["demo"],
+      cssHref: "src/store.css",
+      onClose() {
+        document.body.innerHTML =
+          '<p style="padding:24px">You left the store. <a href="">Walk back in</a></p>';
+      },
+    });
+  </script>
+</body>
+</html>
