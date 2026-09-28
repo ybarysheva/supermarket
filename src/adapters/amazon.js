@@ -365,9 +365,21 @@
       // A shelf's products: everything in its category, the store's best
       // sellers first (or a search, for a display of "everything matching").
       // Returns { products, total, next }; pass `next` back for the page after.
-      searchShelf(section, place, cursor) {
-        if (cursor) return cachedResults(section.query, cursor.node, cursor.page);
-        return cachedResults(section.query, section.category && section.category.node);
+      async searchShelf(section, place, cursor) {
+        if (cursor) return cachedResults(cursor.query ?? section.query, cursor.node, cursor.page);
+        const cat = section.category;
+        const r = await cachedResults(section.query, cat && cat.node);
+        if (r.products.length || !cat) return r;
+        // Amazon lists nothing when some categories are browsed directly;
+        // search for the category's name instead, within its department,
+        // then the whole store.
+        const words = cat.name.replace(/&/g, " ").replace(/\s+/g, " ").trim();
+        for (const node of [section.departmentNode, null]) {
+          if (node === undefined) continue;
+          const w = await cachedResults(words, node);
+          if (w.products.length) return { ...w, next: w.next && { ...w.next, query: words } };
+        }
+        return r;
       },
 
       // The add form carries a one-time token that expires, and carts are

@@ -65,22 +65,21 @@ await p.locator(".sm-stepper.big button[aria-label='One more']").click();
 await p.locator(".sm-closeup .sm-primary").click();
 t.check("puts it in the cart", (await p.locator(".sm-cart-count").textContent()) === "2");
 
-// Full shelves: standing at one, the rest of its category is fetched page
-// by page and put up at real-store spacing, one of each, best first. When
-// the category has more than fits, a More tag puts up the next ones, and
-// back to the first after the last.
+// Full shelves: standing at one, the category's best sellers are fetched
+// page by page until the shelf is full, and put up at real-store spacing,
+// one of each, best first, in brand blocks.
 t.check("'Looking at' names the shelf you face", await until(() => store(p, (s) => s.walker.bayInView()?.section.name === "Peanut Butter & Spreads"), 5000), await store(p, (s) => s.walker.bayInView()?.section.name));
 const full = await until(() =>
   store(p, (s) => {
     const bay = s.walker.bays.find((b) => b.section.name === "Peanut Butter & Spreads");
     const st = s.shelfState(bay.section);
     if (!bay.capacity || bay.items.length < Math.min(bay.capacity, st.total)) return null;
-    return { items: bay.items.length, cap: bay.capacity, total: st.total, unique: new Set(bay.items.map((it) => it.p.id)).size, copies: Math.max(...bay.items.map((it) => it.meshes.length)), first: bay.items[0].p.id === st.products[0].id, more: !!bay.moreTag };
+    return { items: bay.items.length, cap: bay.capacity, total: st.total, loaded: st.products.length, top: bay.items.every((it) => st.products.slice(0, bay.capacity).includes(it.p)), unique: new Set(bay.items.map((it) => it.p.id)).size, copies: Math.max(...bay.items.map((it) => it.meshes.length)), first: bay.items[0].p.id === st.products[0].id, more: bay.stocked.children.some((c) => c.userData.more) };
   })
 );
 t.check("the shelf you're at fills up past the first page", full && full.items > 24, full);
 t.check("one of each product, best sellers first", full && full.unique === full.items && full.copies === 1 && full.first, full);
-t.check("a shelf with more than fits gets a More tag", full && full.total > full.cap && full.more, full);
+t.check("only the best sellers that fit, and no More tag", full && full.top && full.items === Math.min(full.cap, full.loaded) && !full.more, full);
 const blocks = await store(p, (s) => {
   const bay = s.walker.bays.find((b) => b.section.name === "Peanut Butter & Spreads");
   const runs = [];
@@ -90,22 +89,6 @@ const blocks = await store(p, (s) => {
 });
 t.check("each brand stands together in one block", blocks.big.every((b) => blocks.runs.filter((r) => r === b).length === 1) && blocks.big.length > 1, blocks);
 t.check("a brand's best seller is at eye level", blocks.firstAtEye);
-const paged = await store(p, (s) => {
-  const b = s.walker.bays.find((x) => x.section.name === "Peanut Butter & Spreads");
-  const st = s.shelfState(b.section);
-  s.walker.nextPage(b);
-  return { offset: b.offset, cap: b.capacity, first: b.items[0]?.p.id, expect: window.Supermarket.byBrand(st.products)[b.capacity]?.id };
-});
-t.check("More puts up the next products", paged.offset === paged.cap && paged.first === paged.expect, paged);
-const wrapped = await until(() =>
-  store(p, (s) => {
-    const b = s.walker.bays.find((x) => x.section.name === "Peanut Butter & Spreads");
-    if (s.shelfState(b.section).next) return null;
-    s.walker.nextPage(b);
-    return b.offset === 0 ? "start" : null;
-  })
-);
-t.check("and after the last, back to the first", wrapped === "start");
 
 // Keyboard: plain keys walk, browser shortcuts are left alone.
 const prevented = (init) =>
@@ -141,13 +124,6 @@ await p.locator(".sm-w-tools button", { hasText: "Flat shelves" }).click();
 t.check("flat shelves show the same aisle", await until(() => p.locator(".sm-bay .sm-item").count()));
 await p.locator(".sm-grab").first().click();
 t.check("the + on a price tag adds one", (await p.locator(".sm-cart-count").textContent()) === "3");
-const moreBtn = p.locator(".sm-bay .sm-more").first();
-if (await until(() => moreBtn.count(), 5000)) {
-  const bay = p.locator(`.sm-bay[data-bay="${await moreBtn.evaluate((b) => b.closest(".sm-bay").dataset.bay)}"]`);
-  const n = await bay.locator(".sm-item").count();
-  await moreBtn.click();
-  t.check("flat shelves: More from this shelf adds the next page", await until(async () => (await bay.locator(".sm-item").count()) > n), n);
-} else t.check("flat shelves: a shelf with more to load has a More button", false);
 await p.locator("button", { hasText: "Walk here in 3D" }).click();
 t.check("and you can walk back in", await until(() => store(p, (s) => s.view === "walk")));
 

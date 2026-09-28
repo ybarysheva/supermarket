@@ -66,8 +66,9 @@ middle, dairy at the back so you pass everything else on the way.
 
 - Real-store shelf spacing: one of each product, about 20 cm each (30 cm
   per produce crate).
-- A shelf that has more products than room gets a "More ▸" tag that puts
-  up the next ones while you stand there.
+- A shelf carries the category's best sellers, as many as fit, like a
+  real store's range (a store stocks ~120 pastas, not Amazon's 3,000).
+  Anything else is a search away: "Excuse me, where's the…".
 - Best sellers at eye level; less popular on high and low shelves.
 - Shelves fill as you walk up, the one you're heading to first, two
   requests to the store at a time; far shelves are emptied to save memory.
@@ -136,7 +137,8 @@ Office & School shelf that found nothing) led to phase 4.
    around you, and then the next, until the bay is full or the category
    runs out. Amazon: `&page=N`; the total comes from "1-24 of 119 results"
    and the Next button says whether there's another page.
-3. **More ▸**: if a category has more products than its bay holds, a yellow
+3. **More ▸** (removed later: shelves now carry only the best sellers that
+   fit): if a category has more products than its bay holds, a yellow
    tag under the eye-level price tags shows which ones are up ("1–25 of
    119") and puts up the next ones, back to the first after the last. The
    new stock goes up before the old comes down, so nothing flickers. The
@@ -158,6 +160,9 @@ Office & School shelf that found nothing) led to phase 4.
    onto fixtures by name, and runs of shelves are paired into corridors.
    A department with no subcategories is one shelf.
 3. **Shelves** browse their category (`rh=n:<category>`, no search words).
+   Some categories list nothing when browsed directly; then the shelf
+   searches for the category's name, within its department, then the
+   whole store.
    "Excuse me, where's the…" matches the words of the shelf names.
 4. **The demo store** has its own made-up departments and categories in
    the same shape, and is built the same way.

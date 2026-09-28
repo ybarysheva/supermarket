@@ -75,6 +75,7 @@
       query: "",
       keywords: keywordsFor(c.name),
       department: dept.name,
+      departmentNode: dept.node,
       category: { node: c.node, name: c.name },
       bays: 1,
     }));

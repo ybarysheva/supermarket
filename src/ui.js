@@ -703,17 +703,7 @@
       const s = this.shelf(sec, this.place);
       const draw = () => {
         if (s.status === "ready") {
-          const more =
-            s.next &&
-            h("button", {
-              class: "sm-secondary sm-more",
-              onclick: (e) => {
-                e.currentTarget.disabled = true;
-                e.currentTarget.textContent = "Stocking…";
-                this.more(sec, this.place).then(() => container.isConnected && draw());
-              },
-            }, `More from this shelf (${s.products.length}${s.total ? ` of ${s.total}` : "+"})`);
-          container.replaceChildren(...this.renderShelves(s.products), ...[more].filter(Boolean));
+          container.replaceChildren(...this.renderShelves(s.products));
         }
         else if (s.status === "error") {
           container.replaceChildren(
