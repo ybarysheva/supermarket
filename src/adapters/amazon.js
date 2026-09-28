@@ -72,6 +72,22 @@
     });
   }
 
+  // Firefox gives content scripts a page-context fetch (see content.js).
+  const pageFetch = (...args) => (S.pageFetch || fetch)(...args);
+
+  const signedOut = (res) => /\/ap\/signin/.test(res.url);
+  const SIGN_IN = "You're signed out of Amazon. Sign in on amazon.com, then come back.";
+
+  // Only ever link to real web pages, never javascript: or data: URLs.
+  function webUrl(href, base) {
+    try {
+      const u = new URL(href, base);
+      return u.protocol === "https:" || u.protocol === "http:" ? u.href : null;
+    } catch {
+      return null;
+    }
+  }
+
   const text = (el) => (el ? el.textContent.replace(/\s+/g, " ").trim() : "");
 
   function parsePrice(s) {
@@ -91,7 +107,8 @@
       .filter((i) => i.type !== "submit" && i.type !== "button")
       .map((i) => [i.name, i.value]);
     if (!fields.length) return null;
-    return { action: new URL(form.getAttribute("action") || "/cart/add-to-cart", base).href, fields };
+    const action = webUrl(form.getAttribute("action") || "/cart/add-to-cart", base);
+    return action ? { action, fields } : null;
   }
 
   function parseResults(html, base) {
@@ -123,8 +140,8 @@
         price: parsePrice(priceText),
         priceText: priceText || "",
         unitPrice: unitMatch ? unitMatch[1].replace(/\s+/g, "") : "",
-        image: img ? img.getAttribute("src") : null,
-        url: link ? new URL(link.getAttribute("href"), base).href : new URL(`/dp/${asin}`, base).href,
+        image: img ? webUrl(img.getAttribute("src"), base) : null,
+        url: (link && webUrl(link.getAttribute("href"), base)) || new URL(`/dp/${encodeURIComponent(asin)}`, base).href,
         addForm: readAddForm(card, base),
       });
       if (products.length >= MAX_PER_SECTION) break;
@@ -135,6 +152,34 @@
   function makeAdapter(store) {
     const origin = location.origin.includes("amazon.") ? location.origin : "https://www.amazon.com";
 
+    async function fetchResults(query) {
+      const url = new URL("/s", origin);
+      url.searchParams.set("k", query);
+      url.searchParams.set("i", store.searchIndex);
+      const html = await throttle(async () => {
+        const res = await pageFetch(url.href, { credentials: "include" });
+        if (signedOut(res)) throw new Error(SIGN_IN);
+        if (!res.ok) throw new Error(`The store didn't answer (HTTP ${res.status}).`);
+        return res.text();
+      });
+      return parseResults(html, origin);
+    }
+
+    async function postForm(form, qty) {
+      const body = new URLSearchParams();
+      for (const [name, value] of form.fields) body.append(name, /quantity/i.test(name) ? String(qty) : value);
+      if (!form.fields.some(([n]) => /quantity/i.test(n))) body.append("quantity", String(qty));
+      const res = await pageFetch(form.action, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: body.toString(),
+      });
+      if (signedOut(res)) return { ok: false, message: SIGN_IN, final: true };
+      if (!res.ok) return { ok: false, message: `Amazon said no (HTTP ${res.status}).` };
+      return { ok: true };
+    }
+
     return {
       id: store.id,
       name: store.name,
@@ -144,39 +189,24 @@
         const key = `supermarket:${store.id}:${query}`;
         const cached = cacheGet(key);
         if (cached) return cached;
-
-        const url = new URL("/s", origin);
-        url.searchParams.set("k", query);
-        url.searchParams.set("i", store.searchIndex);
-        const html = await throttle(async () => {
-          const res = await fetch(url, { credentials: "include" });
-          if (!res.ok) throw new Error(`The store didn't answer (HTTP ${res.status}).`);
-          return res.text();
-        });
-        const products = parseResults(html, origin);
+        const products = await fetchResults(query);
         cacheSet(key, products);
         return products;
       },
 
+      // The add form carries a one-time token that expires, and carts are
+      // kept between visits. If the saved form fails (or there isn't one),
+      // look the product up again for a fresh form and try once more.
       async addToCart(product, qty) {
-        const form = product.addForm;
-        if (!form) {
-          return { ok: false, message: "This one has to be added from its product page." };
-        }
-        const body = new URLSearchParams();
-        for (const [name, value] of form.fields) {
-          body.append(name, /quantity/i.test(name) ? String(qty) : value);
-        }
-        if (!form.fields.some(([n]) => /quantity/i.test(n))) body.append("quantity", String(qty));
         try {
-          const res = await fetch(form.action, {
-            method: "POST",
-            credentials: "include",
-            headers: { "Content-Type": "application/x-www-form-urlencoded" },
-            body,
-          });
-          if (!res.ok) return { ok: false, message: `Amazon said no (HTTP ${res.status}).` };
-          return { ok: true };
+          if (product.addForm) {
+            const r = await postForm(product.addForm, qty);
+            if (r.ok || r.final) return r;
+          }
+          const fresh = (await fetchResults(product.id)).find((p) => p.id === product.id);
+          if (!fresh || !fresh.addForm) return { ok: false, message: "This one has to be added from its product page." };
+          product.addForm = fresh.addForm;
+          return await postForm(fresh.addForm, qty);
         } catch (e) {
           return { ok: false, message: e.message };
         }
