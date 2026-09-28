@@ -31,7 +31,7 @@ await p.evaluate(() => {
   window.searchLog = { inFlight: 0, max: 0, order: [] };
   a.searchShelf = async (section, place, cursor) => {
     const log = window.searchLog;
-    log.order.push(section.query + (cursor ? ` (page ${cursor.page})` : ""));
+    log.order.push((section.query || section.name) + (cursor ? ` (page ${cursor.page})` : ""));
     log.max = Math.max(log.max, ++log.inFlight);
     try {
       return await orig(section, place, cursor);
@@ -66,48 +66,37 @@ await p.locator(".sm-closeup .sm-primary").click();
 t.check("puts it in the cart", (await p.locator(".sm-cart-count").textContent()) === "2");
 
 // Full shelves: standing at one, the rest of its category is fetched page
-// by page and put up at real-store spacing, one of each, best first.
+// by page and put up at real-store spacing, one of each, best first. When
+// the category has more than fits, a More tag puts up the next ones, and
+// back to the first after the last.
+t.check("'Looking at' names the shelf you face", await until(() => store(p, (s) => s.walker.bayInView()?.section.name === "Peanut Butter & Spreads"), 5000), await store(p, (s) => s.walker.bayInView()?.section.name));
 const full = await until(() =>
   store(p, (s) => {
     const bay = s.walker.bays.find((b) => b.section.name === "Peanut Butter & Spreads");
     const st = s.shelfState(bay.section);
-    if (st.next || bay.items.length < st.products.length) return null;
-    return { items: bay.items.length, unique: new Set(bay.items.map((it) => it.p.id)).size, copies: Math.max(...bay.items.map((it) => it.meshes.length)), first: bay.items[0].p.id === st.products[0].id, more: !!bay.moreTag };
+    if (!bay.capacity || bay.items.length < Math.min(bay.capacity, st.total)) return null;
+    return { items: bay.items.length, cap: bay.capacity, total: st.total, unique: new Set(bay.items.map((it) => it.p.id)).size, copies: Math.max(...bay.items.map((it) => it.meshes.length)), first: bay.items[0].p.id === st.products[0].id, more: !!bay.moreTag };
   })
 );
-t.check("the shelf you're at gets the rest of its category (more than one page)", full && full.items > 24, full);
+t.check("the shelf you're at fills up past the first page", full && full.items > 24, full);
 t.check("one of each product, best sellers first", full && full.unique === full.items && full.copies === 1 && full.first, full);
-t.check("no More tag when everything fits", full && !full.more, full);
-
-// A shelf with more products than room: a More tag puts up the next ones,
-// and back to the first after the last. "Looking at" names the shelf in
-// front of you, not the one behind the shelving.
-await p.evaluate(() => window.Supermarket.current().goTo(window.Supermarket.place("produce"), 3, 4));
-await arrived(p);
-const lookingAt = await until(async () => {
-  const name = await store(p, (s) => s.walker.bayInView()?.section.name);
-  return name === "Nuts & Dried Fruit" ? name : null;
-}, 5000);
-t.check("'Looking at' names the shelf you face", !!lookingAt, await store(p, (s) => s.walker.bayInView()?.section.name));
-t.check("a shelf that's full gets a More tag", await until(() => store(p, (s) => { const b = s.walker.bays.find((x) => x.place.id === "produce" && x.section.name === "Nuts & Dried Fruit"); return b.moreTag && b.items.length === b.capacity; })));
+t.check("a shelf with more than fits gets a More tag", full && full.total > full.cap && full.more, full);
 const paged = await store(p, (s) => {
-  const b = s.walker.bays.find((x) => x.place.id === "produce" && x.section.name === "Nuts & Dried Fruit");
+  const b = s.walker.bays.find((x) => x.section.name === "Peanut Butter & Spreads");
   const st = s.shelfState(b.section);
   s.walker.nextPage(b);
-  return { offset: b.offset, cap: b.capacity, first: b.items[0].p.id, expect: st.products[b.capacity]?.id };
+  return { offset: b.offset, cap: b.capacity, first: b.items[0]?.p.id, expect: st.products[b.capacity]?.id };
 });
 t.check("More puts up the next products", paged.offset === paged.cap && paged.first === paged.expect, paged);
 const wrapped = await until(() =>
   store(p, (s) => {
-    const b = s.walker.bays.find((x) => x.place.id === "produce" && x.section.name === "Nuts & Dried Fruit");
+    const b = s.walker.bays.find((x) => x.section.name === "Peanut Butter & Spreads");
     if (s.shelfState(b.section).next) return null;
     s.walker.nextPage(b);
     return b.offset === 0 ? "start" : null;
   })
 );
 t.check("and after the last, back to the first", wrapped === "start");
-await p.evaluate(() => window.Supermarket.current().ask("peanut butter"));
-await arrived(p);
 
 // Keyboard: plain keys walk, browser shortcuts are left alone.
 const prevented = (init) =>
@@ -117,6 +106,7 @@ const prevented = (init) =>
     return e.defaultPrevented;
   }, init);
 t.check("arrow keys turn you", await prevented({ key: "ArrowLeft" }));
+await prevented({ key: "ArrowRight" }); // and back to face the shelf
 t.check("Ctrl/Cmd shortcuts reach the browser", !(await prevented({ key: "d", ctrlKey: true })) && !(await prevented({ key: "w", metaKey: true })));
 
 // Idle: once nearby shelves have finished stocking, standing still draws
@@ -160,7 +150,7 @@ const before = await p.evaluate(() => {
   return window.searchLog.order.length;
 });
 const next = await until(() => p.evaluate((n) => window.searchLog.order[n], before));
-t.check("the shelf you asked for is fetched first", next === "milk gallon", next);
+t.check("the shelf you asked for is fetched first", next === "Milk", next);
 await arrived(p);
 const stocked = await until(() =>
   store(p, (s) => {
@@ -221,7 +211,7 @@ await until(() => store(r, (s) => s.view === "walk"));
 await r.locator(".sm-ask input").fill("ice cream");
 await r.locator(".sm-ask button").click();
 const jump = await store(r, (s) => !s.walker.move || s.walker.move.speed === Infinity);
-t.check("with reduced motion you jump instead of walking", jump && (await until(() => store(r, (s) => /Dairy & Drinks/.test(s.walker.locTitle.textContent)))));
+t.check("with reduced motion you jump instead of walking", jump && (await until(() => store(r, (s) => /Frozen/.test(s.walker.locTitle.textContent)))));
 
 await browser.close();
 t.done();

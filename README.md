@@ -13,12 +13,13 @@ lays a store over the grocery site:
   on the floor) to walk. Arrow keys / WASD work too. Scroll or pinch to
   zoom in and read the price tags. Click a product on the shelf to pick it
   up. The real products are put on the shelves as you walk up to them.
-- **A full-size store.** Produce by the entrance, bakery, deli, meat &
-  seafood and dairy around the walls, 12 numbered aisles plus frozen and
-  "More to explore" in the middle, about 200 categories in all. Each
-  department uses the display it would in a real store: produce tables and
-  misted racks, open coolers, glass-door freezers, service counters, bread
-  racks, chest freezers. See [docs/store-plan.md](docs/store-plan.md).
+- **The store's own aisles.** The aisles and shelves are built from the
+  store's own departments and categories, with its names: produce by the
+  entrance, bakery, deli, meat & seafood and dairy around the walls,
+  frozen and numbered aisles in the middle. Each department uses the
+  display it would in a real store: produce tables and misted racks, open
+  coolers, glass-door freezers, service counters, bread racks, chest
+  freezers. See [docs/store-plan.md](docs/store-plan.md).
 - **Floor map.** The whole store from above. Tap a spot to walk there.
 - **Flat shelf view.** If 3D is too much (or your computer is slow), tap
   **Flat shelves** to see the same aisle as a flat wall of products.
@@ -93,19 +94,13 @@ where extensions can run:
 
 ## How it works
 
-The extension doesn't use a server. The shelves are filled by running
-ordinary Amazon searches in the background of the page you're already
-signed in to, one search per shelf section. For example, the "Peanut
-Butter & Spreads" shelf searches for `peanut butter jam nutella`.
-
-Each shelf searches within Amazon's own category for it when it can. The
-first time you shop a department, the extension reads that department's
-page on Amazon to learn its subcategories (kept for a week), and matches
-them to our shelves by name: Cereal searches within Cereals, Apples within
-Fresh Fruit. If a category turns out too narrow, the shelf widens to the
-whole department, then to all of Amazon Fresh, so it's never emptier than
-a plain search. Categories that none of our shelves cover get their own
-shelves in the **More to explore** aisle, so every product has a place.
+The extension doesn't use a server. The first time you open a store, it
+reads Amazon's department pages to learn the store's departments and
+their categories (a few seconds; it's remembered for a week), and builds
+the store from them: every department becomes a department or aisle, and
+every category a shelf. A shelf is filled by browsing its category on
+Amazon, in the background of the page you're already signed in to, so the
+store's best sellers come first.
 
 Only the shelves you walk past get loaded, and at most two searches go to
 Amazon at a time, so Amazon doesn't think you're a bot.
@@ -127,7 +122,7 @@ still missing is listed for you to add on its page.
 
 ```
 src/
-  layout.js          our categories and the floor plan: departments, aisles, sections
+  layout.js          builds the floor plan from a store's departments and categories
   fixtures.js        what each display looks like and where products sit on it
   ui.js              the supermarket itself (renders in a shadow DOM)
   walk3d.js          the 3D walk-through (three.js), built from layout.js
@@ -145,14 +140,14 @@ playground/          the demo store; open index.html in a browser
 
 ### Adding another store (e.g. NetCost)
 
-A store is an *adapter* with three functions: `search(query)`,
-`addToCart(product, qty)` and `cartUrl()`. Optionally,
-`searchShelf(section, place, cursor)` fills a shelf a page at a time
-(returning `{ products, total, next }`), and `missingFromCart(ids)` checks
-the cart after checkout. See `src/adapters/amazon.js`.
+A store is an *adapter* with these functions: `catalog()` (its departments
+and categories, which the aisles are built from), `searchShelf(section,
+place, cursor)` (a shelf's products, a page at a time: `{ products, total,
+next }`), `search(query)`, `addToCart(product, qty)` and `cartUrl()`.
+Optionally, `missingFromCart(ids)` checks the cart after checkout. See `src/adapters/amazon.js`.
 To add NetCost Market, you would write `src/adapters/netcost.js`, add its
-site to `manifest.json`, and list it in `content.js`. You could also give it
-its own `layout.js` so the aisles match the real store.
+site to `manifest.json`, and list it in `content.js`. Its aisles are built
+from its own categories, like Amazon's.
 
 ## Known limits
 

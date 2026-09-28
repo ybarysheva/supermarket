@@ -178,12 +178,38 @@
 
   const search = async (query) => (await page(query)).products;
 
+  // The practice store's departments and categories, shaped like a real
+  // store's (see the Amazon adapter's catalog()); the aisles are built from
+  // these just as they are for a real store.
+  const DEPARTMENTS = [
+    ["Produce", "Fresh Fruit|Apples & Pears|Bananas|Berries|Citrus|Grapes|Avocados|Fresh Vegetables|Tomatoes|Onions|Peppers|Carrots|Broccoli|Mushrooms|Lettuce|Spinach & Kale|Fresh Herbs|Cut Fruit|Packaged Salads|Nuts & Seeds"],
+    ["Breads & Bakery", "Sandwich Bread|Baguettes|Bagels|Tortillas|Croissants & Pastries|Cakes|Cookies"],
+    ["Deli & Prepared Foods", "Deli Meats|Deli Cheese|Hummus & Dips|Prepared Meals"],
+    ["Meat & Seafood", "Chicken|Beef|Pork|Sausages|Turkey|Salmon"],
+    ["Breakfast Foods", "Cereal|Oatmeal|Pancake & Waffle Mix|Breakfast Bars"],
+    ["Pantry Staples", "Pasta|Pasta Sauce|Ramen & Noodles|Rice|Quinoa & Grains|Lentils & Beans|Soup|Broth|Chili|Canned Tomatoes|Canned Tuna|Canned Fruit|Peanut Butter & Spreads|Honey|Olive Oil|Vinegar|Salad Dressing|Ketchup & Condiments|Mayonnaise|Soy Sauce|Salsa|Taco Kits|Curry & Coconut Milk|Pickles|Flour|Sugar & Sweeteners|Baking Powder & Soda|Cake Mix|Frosting & Sprinkles|Spices|Marinades & Seasoning"],
+    ["Beverages", "Water|Soda|Orange Juice|Sports Drinks|Iced Tea|Lemonade|Drink Mix|Kombucha|Cold Brew|Coffee|Coffee K-Cups|Tea|Cocoa"],
+    ["Snack Foods", "Potato Chips|Pretzels|Cheese Puffs|Popcorn|Rice Cakes|Nuts|Jerky|Crackers|Graham Crackers|Cookies & Chocolate|Candy|Gum & Mints|Granola Bars"],
+    ["Household", "Paper Towels|Toilet Paper|Tissues|Napkins|Plates & Cups|Dish Soap|Laundry|Cleaning Supplies|Sponges|Trash Bags|Foil & Wrap|Batteries|Light Bulbs"],
+    ["Personal Care", "Toothpaste|Body Wash|Shampoo|Deodorant|Lotion|Razors|Cotton|Feminine Care"],
+    ["Health & Wellness", "Vitamins|Supplements|Pain Relief|Cold Medicine|Bandages & First Aid"],
+    ["Baby Food & Care", "Baby Food|Formula|Toddler Snacks|Diapers & Wipes"],
+    ["Pet", "Dog Food|Dog Treats|Cat Food|Cat Treats|Cat Litter"],
+    ["Frozen Foods", "Frozen Meals|Frozen Pizza|Frozen Vegetables|Frozen Fruit|Frozen Waffles|Ice Cream|Ice Cream Novelties"],
+    ["Dairy, Eggs & Cheese", "Milk|Oat Milk|Eggs|Butter|Yogurt|Cheese|Sour Cream"],
+  ].map(([name, subs], d) => ({
+    node: `d${d}`,
+    name,
+    subs: subs.split("|").map((n, i) => ({ node: `d${d}-${i}`, name: n })),
+  }));
+
   S.adapters = S.adapters || {};
   S.adapters.demo = () => ({
     id: "demo",
     name: "Demo Market",
     tagline: "Practice store — nothing is really bought",
     search,
+    catalog: () => new Promise((resolve) => setTimeout(() => resolve(DEPARTMENTS), 300)),
     searchShelf: (section, place, cursor) => page(section.query || section.name, cursor ? cursor.page : 1),
     async addToCart() {
       return { ok: true };

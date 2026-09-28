@@ -80,7 +80,8 @@ await context.route("https://www.amazon.com/**", async (route) => {
   if (u.pathname === "/s") {
     const page = Number(u.searchParams.get("page") || 1);
     seen.searches.push({ k: u.searchParams.get("k"), i: u.searchParams.get("i"), rh: u.searchParams.get("rh"), page });
-    return route.fulfill(html(resultsPage(u.searchParams.get("k"), u.searchParams.get("i"), page)));
+    // Browsing a category (no search words): name its products after it.
+    return route.fulfill(html(resultsPage(u.searchParams.get("k") || u.searchParams.get("rh"), u.searchParams.get("i"), page)));
   }
   if (u.pathname.startsWith("/cart/add-to-cart")) {
     const body = new URLSearchParams(req.postData());
@@ -126,6 +127,7 @@ await page.goto("https://www.amazon.com/alm/storefront?almBrandId=QW1hem9uIEZyZX
 const button = page.getByText("🛒 Shop like a supermarket");
 t.check("the button shows on the Fresh storefront", await until(() => button.isVisible()));
 await button.click();
+t.check("it builds the store from Amazon's departments and their pages", await until(() => seen.departmentPages.includes("18787303011") && seen.departmentPages.length >= 10), seen.departmentPages);
 
 const host = page.locator("#supermarket-overlay-host");
 t.check("the store opens", await until(() => host.count()));
@@ -139,10 +141,9 @@ t.check("product photos come through the extension's photo fetcher", await until
 // Ask for something, then use the flat view to click reliably.
 await page.locator(".sm-ask input").fill("peanut butter");
 await page.locator(".sm-ask button").click();
-t.check("asking searches for that shelf", await until(() => seen.searches.some((s) => /peanut butter/.test(s.k))));
-t.check("it learns the store's categories from its department pages", await until(() => seen.departmentPages.includes("18787303011")), seen.departmentPages);
-t.check("the shelf searches within its Amazon category", await until(() => seen.searches.some((s) => /peanut butter/.test(s.k) && s.rh === "n:777")), seen.searches.filter((s) => /peanut/.test(s.k)));
-t.check("standing at the shelf, it fetches the category's next page", await until(() => seen.searches.some((s) => /peanut butter/.test(s.k) && s.rh === "n:777" && s.page === 2)), seen.searches.filter((s) => /peanut/.test(s.k)));
+const nutButters = (s) => s.rh === "n:777" && !s.k;
+t.check("asking walks to the category's shelf, which shows that category", await until(() => seen.searches.some(nutButters)), seen.searches);
+t.check("standing at the shelf, it fetches the category's next page", await until(() => seen.searches.some((s) => nutButters(s) && s.page === 2)), seen.searches.filter(nutButters));
 t.check("each department page is read once", seen.departmentPages.filter((n) => n === "18787303011").length === 1, seen.departmentPages);
 await page.waitForTimeout(3000);
 await page.locator(".sm-w-tools button", { hasText: "Flat shelves" }).click();
