@@ -1579,3 +1579,8 @@ button.sm-door-mat {
     scroll-behavior: auto !important;
   }
 }
+
+.sm-more {
+  display: block;
+  margin: 10px auto 4px;
+}

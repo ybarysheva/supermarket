@@ -18,6 +18,10 @@ const manifest = JSON.parse(readFileSync(root + "manifest.json", "utf8"));
 t.check("manifest.json has no Firefox-only settings", !manifest.background.scripts && !manifest.browser_specific_settings);
 const png = readFileSync(root + "icons/icon128.png");
 const seen = { searches: [], posts: [], images: 0, pages: [], departmentPages: [] };
+// What's in the (fake) Amazon cart. The first time each product is posted
+// Amazon quietly drops it, like it does with an expired token.
+const cart = new Set();
+const dropped = new Set();
 
 // The store front shows the browse bar with Amazon's departments; each
 // department page lists its subcategories (structure copied from a real page).
@@ -28,10 +32,13 @@ const departmentPage = (node) =>
     .map(([n, name]) => `<a class="_browse-bar-widget_style_categoryNode__2uOzA" data-browse-node-id="${n}" data-node-link="/alm/category/?node=${n}"><div class="_browse-bar-widget_style_categoryFont__2zmt5">${name}</div></a>`)
     .join("")}</body></html>`;
 
-// A search results page shaped like Amazon's, with made-up products.
-function resultsPage(query, index) {
-  const cards = [0, 1, 2, 3, 4].map((i) => {
-    const asin = `B0${Buffer.from(query).toString("hex").slice(0, 6).toUpperCase()}${i}`;
+// A search results page shaped like Amazon's, with made-up products: 8 in
+// all, 5 on the first page and 3 on the second.
+// Searching for a product's ASIN finds just that product.
+function resultsPage(query, index, page = 1) {
+  const byAsin = /^B0[0-9A-F]{7}$/.test(query);
+  const cards = (byAsin ? [0] : page === 1 ? [0, 1, 2, 3, 4] : [5, 6, 7]).map((i) => {
+    const asin = byAsin ? query : `B0${Buffer.from(query).toString("hex").slice(0, 6).toUpperCase()}${i}`;
     return `
       <div data-component-type="s-search-result" data-asin="${asin}">
         <img class="s-image" src="https://m.media-amazon.com/images/I/${asin}.png">
@@ -40,17 +47,20 @@ function resultsPage(query, index) {
         <span>($0.${i + 1}0/Ounce)</span>
         ${
           // The last one is sold by weight: no Add button in search results.
-          i === 4
+          (byAsin ? query.endsWith("4") : i === 4)
             ? ""
             : `<form method="post" action="/cart/add-to-cart/ref=sm">
           <input type="hidden" name="anti-csrftoken-a2z" value="tok-${asin}">
           <input type="hidden" name="items[0.base][asin]" value="${asin}">
           <input type="hidden" name="items[0.base][quantity]" value="1">
+          <input name="submit.addToCart" aria-label="Add to cart" type="submit">
         </form>`
         }
       </div>`;
   });
-  return `<html><body><div class="s-main-slot">${cards.join("")}</div></body></html>`;
+  const bar = `<div data-component-type="s-result-info-bar"><h1><span>${page === 1 ? "1-5" : "6-8"} of 8 results for</span></h1></div>`;
+  const next = page === 1 ? `<a class="s-pagination-item s-pagination-next" href="/s?k=x&page=2">Next</a>` : `<span class="s-pagination-item s-pagination-next s-pagination-disabled">Next</span>`;
+  return `<html><body>${bar}<div class="s-main-slot">${cards.join("")}</div>${next}</body></html>`;
 }
 
 const html = (body) => ({ status: 200, contentType: "text/html", body });
@@ -68,14 +78,22 @@ await context.route("https://www.amazon.com/**", async (route) => {
   const u = new URL(req.url());
   seen.pages.push(`${req.method()} ${u.pathname}`);
   if (u.pathname === "/s") {
-    seen.searches.push({ k: u.searchParams.get("k"), i: u.searchParams.get("i"), rh: u.searchParams.get("rh") });
-    return route.fulfill(html(resultsPage(u.searchParams.get("k"), u.searchParams.get("i"))));
+    const page = Number(u.searchParams.get("page") || 1);
+    seen.searches.push({ k: u.searchParams.get("k"), i: u.searchParams.get("i"), rh: u.searchParams.get("rh"), page });
+    return route.fulfill(html(resultsPage(u.searchParams.get("k"), u.searchParams.get("i"), page)));
   }
   if (u.pathname.startsWith("/cart/add-to-cart")) {
+    const body = new URLSearchParams(req.postData());
+    const asin = body.get("items[0.base][asin]");
     seen.posts.push(req.postData());
+    if (body.has("submit.addToCart") && (seen.posts.length > 1 || dropped.has(asin))) cart.add(asin);
+    else dropped.add(asin);
     return route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
   }
-  if (u.pathname === "/cart/localmarket") return route.fulfill(html("<h1>Your Amazon Fresh cart</h1>"));
+  if (u.pathname === "/cart/localmarket") {
+    const items = [...cart].map((a) => `<div class="sc-list-item" data-asin="${a}">${a}</div>`).join("");
+    return route.fulfill(html(`<h1>Your Amazon Fresh cart</h1>${items || "<p>Your Amazon Fresh Cart is empty.</p>"}`));
+  }
   if (u.pathname === "/alm/category/") {
     seen.departmentPages.push(u.searchParams.get("node"));
     return route.fulfill(html(departmentPage(u.searchParams.get("node"))));
@@ -124,6 +142,7 @@ await page.locator(".sm-ask button").click();
 t.check("asking searches for that shelf", await until(() => seen.searches.some((s) => /peanut butter/.test(s.k))));
 t.check("it learns the store's categories from its department pages", await until(() => seen.departmentPages.includes("18787303011")), seen.departmentPages);
 t.check("the shelf searches within its Amazon category", await until(() => seen.searches.some((s) => /peanut butter/.test(s.k) && s.rh === "n:777")), seen.searches.filter((s) => /peanut/.test(s.k)));
+t.check("standing at the shelf, it fetches the category's next page", await until(() => seen.searches.some((s) => /peanut butter/.test(s.k) && s.rh === "n:777" && s.page === 2)), seen.searches.filter((s) => /peanut/.test(s.k)));
 t.check("each department page is read once", seen.departmentPages.filter((n) => n === "18787303011").length === 1, seen.departmentPages);
 await page.waitForTimeout(3000);
 await page.locator(".sm-w-tools button", { hasText: "Flat shelves" }).click();
@@ -144,7 +163,8 @@ await panel.getByRole("button", { name: "Remove" }).click();
 t.check("Remove takes it out of the cart", (await page.locator(".sm-cart-count").textContent()) === "0");
 await panel.getByText("Go to my Amazon Fresh cart").click();
 await page.waitForURL(/\/cart\/localmarket/, { timeout: 20000 }).catch(() => {});
-t.check("checkout posts each item to Amazon", seen.posts.length === 2 && seen.posts.every((b) => /anti-csrftoken-a2z=tok-/.test(b)), seen.posts);
+t.check("checkout posts each item to Amazon, with the Add button", seen.posts.length === 3 && seen.posts.every((b) => /anti-csrftoken-a2z=tok-/.test(b) && /submit\.addToCart=/.test(b)), seen.posts);
+t.check("and posts again the one Amazon dropped, so both end up in the cart", cart.size === 2, [...cart]);
 t.check("and lands on the Fresh cart", /\/cart\/localmarket/.test(page.url()), page.url());
 
 // The toolbar button opens it on any Amazon page.

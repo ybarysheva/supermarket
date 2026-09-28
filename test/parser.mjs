@@ -73,6 +73,7 @@ const result = await page.evaluate(async ({ html, realHtml, barHtml }) => {
       dept("Dairy, Eggs & Cheese", "d", ["d1", "Milk & Cream"], ["d2", "Eggs"], ["d3", "Cheese"]),
       dept("Frozen Foods", "f", ["f1", "Ice Cream & Novelties"], ["f2", "Frozen Pizza"]),
       dept("Snack Foods", "n", ["n1", "Chips & Crisps"], ["n2", "Puffed Snacks"]),
+      dept("Office & School", "o"),
     ],
   };
   const where = (placeId, sectionName) => {
@@ -90,10 +91,30 @@ const result = await page.evaluate(async ({ html, realHtml, barHtml }) => {
     chips: where("a7", "Potato Chips"),
     pasta: where("a4", "Pasta"),
     toilet: where("a10", "Toilet Paper"),
+    office: where("more", "Office & School"),
   };
   const leftover = C.unclaimed(tree, S.allPlaces()).map((c) => c.name);
 
-  return { products, captcha, sent, added, noForm, cartUrl: fresh.cartUrl(), retried, refreshed, signedOut, evil, realProducts, departments, subs, mapping, leftover };
+  const bar = (t, next) => `<div data-component-type="s-result-info-bar"><h1><span>${t}</span></h1></div>${next}`;
+  const page1 = S.adapters._parseAmazonPage(bar("1-24 of over 1,000 results for", '<a class="s-pagination-next" href="?page=2">Next</a>'), "https://www.amazon.com");
+  const pageLast = S.adapters._parseAmazonPage(bar("97-119 of 119 results for", '<span class="s-pagination-next s-pagination-disabled">Next</span>'), "https://www.amazon.com");
+  const noNav = S.adapters._parseAmazonPage(bar("1-24 of 119 results for", ""), "https://www.amazon.com");
+  const paging = { page1, pageLast, noNav };
+
+  // A shelf whose words find nothing anywhere shows its category instead.
+  const card = '<div data-component-type="s-search-result" data-asin="B0OFFICE01"><h2>Pencils</h2></div>';
+  const asked = [];
+  window.fetch = async (url) => {
+    const u = new URL(url);
+    if (u.pathname === "/s") asked.push(`${u.searchParams.get("k") || ""}|${u.searchParams.get("rh") || ""}`);
+    const hit = u.pathname === "/s" && !u.searchParams.get("k") && u.searchParams.get("rh") === "n:1064954";
+    return new Response(hit ? card : "<html></html>");
+  };
+  const more = S.place("more");
+  const office = more.sides.flatMap((sd) => sd.sections).find((x) => x.name === "Office & School");
+  const browsed = await S.adapters.fresh().searchShelf(office, more);
+  const fallback = { names: browsed.products.map((p) => p.name), asked };
+  return { fallback, paging, products, captcha, sent, added, noForm, cartUrl: fresh.cartUrl(), retried, refreshed, signedOut, evil, realProducts, departments, subs, mapping, leftover };
 }, { html: fixture, realHtml: real, barHtml: bar });
 await browser.close();
 
@@ -113,6 +134,9 @@ const checks = [
   ["links to the Fresh cart", result.cartUrl.includes("almBrandId=QW1hem9uIEZyZXNo")],
   ["retries an expired add form with a fresh one", result.refreshed.ok && result.retried.join(",") === "POST /cart/add-to-cart/ref=fresh_atc,GET /s,POST /cart/add-to-cart/ref=fresh_atc"],
   ["says so when you're signed out", /signed out/.test(result.signedOut || "")],
+  ["reads how many results there are in all", result.paging.page1.total === 1000 && result.paging.pageLast.total === 119],
+  ["a shelf whose words find nothing shows its category instead", result.fallback.names.join() === "Pencils", result.fallback],
+  ["knows when there's another page", result.paging.page1.more && !result.paging.pageLast.more && result.paging.noNav.more],
   ["drops javascript: links", result.evil.url === "https://www.amazon.com/dp/B0EVIL" && result.evil.image === null],
 ];
 const rp = result.realProducts;
@@ -130,6 +154,7 @@ checks.push(
   ["categories: Potato Chips searches Chips & Crisps", m.chips[0] === "Chips & Crisps"],
   ["categories: Pasta searches Pasta & Noodles", m.pasta[0] === "Pasta & Noodles"],
   ["categories: no match means search the whole store", m.toilet.length === 0],
+  ["categories: a shelf named like a department searches that department", m.office.join() === "Office & School", m.office],
   ["categories: unclaimed ones go to More to explore", result.leftover.length > 0 && !result.leftover.includes("Fresh Fruit") && !result.leftover.includes("Cereals"), result.leftover]
 );
 checks.push(

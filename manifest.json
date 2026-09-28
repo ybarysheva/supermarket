@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Supermarket Mode",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Shop Amazon Fresh and Whole Foods like you're walking through a real supermarket: aisles, shelves, price tags, a cart and a shopping list.",
   "icons": {
     "16": "icons/icon16.png",
