@@ -233,6 +233,56 @@
   const ORDER = ["produce", "bakery", "deli", "meat", "aisle", "frozen", "dairy"];
   const order = (p) => ORDER.indexOf(p.zone) * 1000 + (Number(p.number) || 0);
 
+  // ---- brands ----------------------------------------------------------------
+  //
+  // A real shelf keeps each brand together. Product cards don't say the
+  // brand, so it's read from the name: against the category's brand list
+  // (the Brands filter on the store's search pages) when there is one,
+  // otherwise its first word ("Barilla Rigatoni…"), or first two when the
+  // first is short ("De Cecco…").
+  const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  S.brandOf = function (name, known = []) {
+    const n = norm(name);
+    const squashed = n.replace(/ /g, "");
+    let best = null;
+    for (const b of known) {
+      const nb = norm(b);
+      if (!nb) continue;
+      if (n === nb || n.startsWith(nb + " ")) {
+        if (!best || nb.length > norm(best).length) best = b;
+        continue;
+      }
+      // "Justin's Nut Butter" is the brand of "Justins, Almond Butter…".
+      const first = nb.split(" ")[0];
+      if (!best && first.length >= 4 && (n.startsWith(first + " ") || squashed.startsWith(first))) best = b;
+    }
+    if (best) return best;
+    const words = String(name || "").replace(/,.*$/, "").trim().split(/\s+/);
+    return words[0] && words[0].length <= 3 && !/^\d+$/.test(words[0]) && words[1] ? `${words[0]} ${words[1]}` : words[0] || "";
+  };
+
+  // The store's own brand sits beside the best seller, as in a real store.
+  const STORE_BRAND = /^(365|amazon|happy belly|whole foods|wickedly prime|amazon grocery|amazon fresh|store brand)\b/;
+
+  // Products in shelf order: each brand together, brands in order of their
+  // best seller, brands with a single product at the end. Within a brand,
+  // the store's order (best sellers first) is kept.
+  S.byBrand = function (products) {
+    const groups = new Map();
+    for (const p of products) {
+      const key = norm(p.brand || S.brandOf(p.name)) || p.id;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(p);
+    }
+    const keys = [...groups.keys()];
+    const big = keys.filter((k) => groups.get(k).length > 1);
+    const own = big.findIndex((k) => STORE_BRAND.test(k));
+    if (own > 1) big.splice(1, 0, ...big.splice(own, 1));
+    const singles = keys.filter((k) => groups.get(k).length === 1);
+    return [...big, ...singles].flatMap((k) => groups.get(k));
+  };
+  S.brandKey = (p) => norm(p.brand || S.brandOf(p.name));
+
   // ---- the current store ---------------------------------------------------
 
   let byId = new Map();

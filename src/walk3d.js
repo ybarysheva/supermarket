@@ -1042,13 +1042,19 @@
       bay.capacity = perRow * rows.length;
       const s = this.store.shelfState(bay.section);
       if (bay.offset >= products.length && !(s && s.next)) bay.offset = 0;
-      const shown = products.slice(bay.offset, bay.offset + bay.capacity);
+      // Packaged goods stand in brand blocks: each brand fills columns from
+      // eye level up and down, so it reads as one strip of the shelf with
+      // its best sellers at eye level. Loose produce fills row by row.
+      const ordered = crates ? products : S.byBrand(products);
+      const shown = ordered.slice(bay.offset, bay.offset + bay.capacity);
       const tagRows = rows.map(() => []);
+      const R = rows.length;
 
       shown.forEach((p, idx) => {
-        const r = Math.floor(idx / perRow);
+        const r = crates ? Math.floor(idx / perRow) : idx % R;
+        const col = crates ? idx % perRow : Math.floor(idx / R);
         const row = rows[r];
-        const x0 = -inner / 2 + (idx % perRow) * slotW;
+        const x0 = -inner / 2 + col * slotW;
         const item = row.kind === "crate" ? this.crate(bay, row, p, x0, slotW) : this.facings(bay, row, p, x0, slotW);
         Object.assign(item, { p, x0, slotW, row });
         bay.items.push(item);
@@ -1209,10 +1215,18 @@
       const tex = canvasTexture(cw, ch, (g) => {
         g.fillStyle = "#8d959c";
         g.fillRect(0, 0, cw, ch);
-        for (const it of items) {
+        let prev = null;
+        for (const it of items.slice().sort((a, b) => a.x0 - b.x0)) {
           const tw = Math.min(it.slotW * 0.94, 0.34) * (cw / bay.w);
           const tx = px(it.x0) + (it.slotW * (cw / bay.w) - tw) / 2;
           this.drawTag(g, it.p, tx, 4, tw, ch - 8);
+          // A dark line where one brand's block ends and the next begins.
+          const brand = S.brandKey(it.p);
+          if (prev !== null && brand !== prev) {
+            g.fillStyle = "#3b4247";
+            g.fillRect(px(it.x0) - 3, 0, 6, ch);
+          }
+          prev = brand;
         }
       });
       const m = plane(tex, bay.w, TAG_H);

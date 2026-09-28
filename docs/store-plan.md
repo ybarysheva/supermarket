@@ -161,3 +161,20 @@ Office & School shelf that found nothing) led to phase 4.
    "Excuse me, where's the…" matches the words of the shelf names.
 4. **The demo store** has its own made-up departments and categories in
    the same shape, and is built the same way.
+
+## Brand blocks (built)
+
+- Real shelves keep each brand together in a vertical block. Product
+  cards on Amazon don't name the brand, but each search page's sidebar has
+  a Brands filter listing the category's brands; product names are matched
+  against it ("Justins, Almond Butter…" → Justin's Nut Butter), and
+  otherwise the brand is the name's first word (first two when the first
+  is short: "De Cecco").
+- Order on the shelf (`S.byBrand`): brands in order of their best seller,
+  the store's own brand (365, Amazon Grocery…) second, brands with a
+  single product at the end. Each brand fills columns top to bottom, eye
+  level first, so its best sellers are at eye level; a dark line on the
+  price-tag strip marks where brands change.
+- Next: sections inside a shelf by sub-category (Spaghetti, Penne…), from
+  the same sidebar's department list, fetched in place of more pages of
+  the mixed list.

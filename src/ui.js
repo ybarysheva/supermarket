@@ -735,6 +735,7 @@
       if (!products.length) {
         return [h("div", { class: "sm-out-of-stock" }, h("strong", {}, "Empty shelf"), h("span", {}, "Nothing here right now — try asking at the top."))];
       }
+      products = S.byBrand(products);
       const perRow = Math.min(8, Math.max(2, Math.ceil(products.length / 3)));
       const rows = [];
       for (let i = 0; i < products.length; i += perRow) rows.push(products.slice(i, i + perRow));
