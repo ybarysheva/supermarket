@@ -11,6 +11,11 @@ import { root, GL_ARGS, checker, until } from "./helpers.mjs";
 process.env.PW_EXPERIMENTAL_SERVICE_WORKER_NETWORK_EVENTS = "1";
 
 const t = checker("Extension on (fake) Amazon");
+
+// Chrome warns about Firefox-only settings, so they live in the Firefox
+// build (npm run build:firefox), not in manifest.json.
+const manifest = JSON.parse(readFileSync(root + "manifest.json", "utf8"));
+t.check("manifest.json has no Firefox-only settings", !manifest.background.scripts && !manifest.browser_specific_settings);
 const png = readFileSync(root + "icons/icon128.png");
 const seen = { searches: [], posts: [], images: 0, pages: [] };
 

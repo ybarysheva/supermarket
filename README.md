@@ -57,8 +57,10 @@ the ↻ reload arrow on the extension's card in `chrome://extensions`.
 
 ### Firefox
 
-Go to `about:debugging#/runtime/this-firefox`, click **Load Temporary
-Add-on…** and pick `manifest.json`. Firefox asks extensions to request
+Firefox needs one setting different from Chrome, so it gets its own copy.
+Run `npm run build:firefox` (needs [Node.js](https://nodejs.org)), which
+writes it to `dist/firefox`. Then go to `about:debugging#/runtime/this-firefox`,
+click **Load Temporary Add-on…** and pick `dist/firefox/manifest.json`. Firefox asks extensions to request
 site access, so the first time, click the extensions (puzzle piece) button
 and allow Supermarket Mode on amazon.com. Temporary add-ons are removed
 when Firefox restarts; installing permanently needs the add-on to be
