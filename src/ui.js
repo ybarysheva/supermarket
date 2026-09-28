@@ -4,7 +4,7 @@
 // It renders into a shadow root so the host site's CSS can't reach in (and
 // ours can't leak out). Usage:
 //
-//   Supermarket.open({ stores: ["fresh", "wholefoods"], cssHref, onClose })
+//   Supermarket.open({ stores: ["fresh", "wholefoods"], cssText | cssHref, onClose })
 (function () {
   const S = (window.Supermarket = window.Supermarket || {});
 
@@ -76,7 +76,7 @@
 
       this.host = h("div", { id: "supermarket-overlay-host" });
       this.root = this.host.attachShadow({ mode: "open" });
-      if (opts.cssHref) this.root.append(h("link", { rel: "stylesheet", href: opts.cssHref }));
+      this.addStyles(opts);
 
       this.el = {
         app: h("div", { class: "sm-app" }),
@@ -92,6 +92,23 @@
       this.root.append(e.app);
 
       this.onKey = this.onKey.bind(this);
+    }
+
+    // Constructed stylesheets aren't subject to the host page's Content
+    // Security Policy. Where they can't be used, fall back to a <style>.
+    addStyles({ cssText, cssHref }) {
+      if (cssText) {
+        try {
+          const sheet = new CSSStyleSheet();
+          sheet.replaceSync(cssText);
+          this.root.adoptedStyleSheets = [sheet];
+          return;
+        } catch {
+          this.root.append(h("style", {}, cssText));
+          return;
+        }
+      }
+      if (cssHref) this.root.append(h("link", { rel: "stylesheet", href: cssHref }));
     }
 
     mount() {
@@ -111,6 +128,7 @@
       if (this.walker) this.walker.destroy();
       this.host.remove();
       document.documentElement.style.overflow = this.prevOverflow;
+      if (this.aisleObserver) this.aisleObserver.disconnect();
       if (this.opts.onClose) this.opts.onClose();
     }
 
@@ -132,8 +150,7 @@
       if (this.use3d && place.id !== "special") {
         this.view = "walk";
         this.renderMain();
-        this.walker.goToSection(place, sideIndex, sectionIndex ?? 0);
-        return;
+        if (this.walker) return this.walker.goToSection(place, sideIndex, sectionIndex ?? 0);
       }
       this.goToFlat(place, sideIndex, sectionIndex);
     }
@@ -145,6 +162,18 @@
       this.view = "aisle";
       this.renderMain();
       this.el.main.scrollTop = 0;
+    }
+
+    // The 3D view couldn't start or lost its graphics context (phones do this
+    // under memory pressure). Carry on with the flat shelves.
+    fallBackToFlat(reason) {
+      console.warn("Supermarket Mode: 3D view unavailable,", reason);
+      if (this.walker) this.walker.destroy();
+      this.walker = null;
+      this.use3d = false;
+      this.view = "map";
+      this.renderMain();
+      this.toast("3D view isn't available here, so here's the store map instead.");
     }
 
     goMap() {
@@ -346,8 +375,18 @@
       const m = this.el.main;
       m.className = `sm-main view-${this.view}`;
       if (this.view !== "walk" && this.walker) this.walker.stop();
+      if (this.aisleObserver) {
+        this.aisleObserver.disconnect();
+        this.aisleObserver = null;
+      }
       if (this.view === "walk") {
-        if (!this.walker) this.walker = new S.Walk3D(this);
+        if (!this.walker) {
+          try {
+            this.walker = new S.Walk3D(this);
+          } catch (e) {
+            return this.fallBackToFlat(e);
+          }
+        }
         m.replaceChildren(this.walker.el);
         this.walker.start();
       } else if (this.view === "entrance") m.replaceChildren(this.renderEntrance());
@@ -407,7 +446,7 @@
         h("div", { class: "sm-floor" },
           ["bakery", "meat", "produce", "dairy", "deli"].map((id) => deptTile(dept(id))),
           h("div", { class: "sm-aisles area-aisles" }, L.aisles.map(aisleTile)),
-          h(this.use3d ? "button" : "div", { class: "sm-door-mat area-door", onclick: this.use3d ? () => { this.view = "walk"; this.renderMain(); this.walker.goToEntrance(); } : null }, h("span", {}, "🚪"), " Entrance", h("small", {}, this.use3d ? "Walk in from the door" : "You are here")),
+          h(this.use3d ? "button" : "div", { class: "sm-door-mat area-door", onclick: this.use3d ? () => { this.view = "walk"; this.renderMain(); this.walker?.goToEntrance(); } : null }, h("span", {}, "🚪"), " Entrance", h("small", {}, this.use3d ? "Walk in from the door" : "You are here")),
           h("button", { class: "sm-checkout-tile area-checkout", onclick: () => this.toggleCart(true) }, "🧾 Checkout lanes")
         )
       );
@@ -530,7 +569,7 @@
       const run = this.run;
       const bays = [...run.querySelectorAll(".sm-bay")];
       // Only stock shelves you're about to walk past.
-      const io = new IntersectionObserver(
+      const io = (this.aisleObserver = new IntersectionObserver(
         (entries) => {
           for (const e of entries) {
             if (e.isIntersecting) {
@@ -540,7 +579,7 @@
           }
         },
         { root: run, rootMargin: "0px 900px 0px 900px" }
-      );
+      ));
       bays.forEach((b) => io.observe(b));
 
       if (this.focus != null && bays[this.focus]) {
@@ -600,7 +639,7 @@
       this.renderList();
     }
 
-        toggleCart(open = !this.cartOpen) {
+    toggleCart(open = !this.cartOpen) {
       this.cartOpen = open;
       this.renderCart();
     }
@@ -692,14 +731,20 @@
         e.stopPropagation();
         return;
       }
-      if (typing || !this.el.modal.hidden) return;
+      // Leave browser shortcuts (Cmd+W, Ctrl+D, …) alone.
+      if (typing || !this.el.modal.hidden || e.ctrlKey || e.metaKey || e.altKey) return;
       if (this.view === "walk") {
-        if (this.walker.onKey(e)) e.preventDefault();
+        if (this.walker && this.walker.onKey(e)) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
         return;
       }
       if (this.view !== "aisle") return;
-      if (e.key === "ArrowRight") { this.walk(1); e.preventDefault(); }
-      else if (e.key === "ArrowLeft") { this.walk(-1); e.preventDefault(); }
+      if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+      this.walk(e.key === "ArrowRight" ? 1 : -1);
+      e.preventDefault();
+      e.stopPropagation();
     }
   }
 
@@ -719,5 +764,6 @@
   };
 
   S.isOpen = () => !!current;
+  S.current = () => current; // for tests and debugging
   S.close = () => current && current.close();
 })();

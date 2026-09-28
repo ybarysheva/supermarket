@@ -47,6 +47,12 @@
   font: inherit;
   color: inherit;
   cursor: pointer;
+  touch-action: manipulation; /* no double-tap zoom delay on phones */
+}
+
+.sm-app :focus-visible {
+  outline: 3px solid var(--tag-deal);
+  outline-offset: 2px;
 }
 
 .sm-app h1,
@@ -65,7 +71,7 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 16px;
+  padding: calc(10px + env(safe-area-inset-top, 0px)) calc(16px + env(safe-area-inset-right, 0px)) 10px calc(16px + env(safe-area-inset-left, 0px));
   background: var(--sign);
   color: var(--sign-ink);
   box-shadow: 0 2px 8px rgb(0 0 0 / 0.15);
@@ -880,7 +886,7 @@
 .sm-w-controls {
   position: absolute;
   left: 50%;
-  bottom: 18px;
+  bottom: calc(18px + env(safe-area-inset-bottom, 0px));
   transform: translateX(-50%);
   display: flex;
   gap: 8px;
@@ -910,7 +916,7 @@
 .sm-w-tools {
   position: absolute;
   left: 12px;
-  bottom: 18px;
+  bottom: calc(18px + env(safe-area-inset-bottom, 0px));
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1075,7 +1081,7 @@ button.sm-door-mat {
 .sm-list-add textarea {
   flex: 1;
   font: inherit;
-  font-size: 15px;
+  font-size: 16px; /* anything smaller makes iPhones zoom in on focus */
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: 6px 8px;
@@ -1096,8 +1102,8 @@ button.sm-door-mat {
 
 .sm-cart {
   position: fixed;
-  right: 16px;
-  bottom: 16px;
+  right: calc(16px + env(safe-area-inset-right, 0px));
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
   z-index: 5;
   display: flex;
   flex-direction: column;
@@ -1144,6 +1150,7 @@ button.sm-door-mat {
 .sm-cart-panel {
   width: min(420px, calc(100vw - 32px));
   max-height: calc(100vh - 150px);
+  max-height: calc(100dvh - 150px);
   overflow: auto;
   background: #fff;
   border-radius: var(--radius);
@@ -1345,6 +1352,7 @@ button.sm-door-mat {
   gap: 24px;
   width: min(760px, 100%);
   max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
   overflow: auto;
   background: #fff;
   border-radius: var(--radius);
@@ -1519,5 +1527,17 @@ button.sm-door-mat {
   .sm-toast {
     max-width: calc(100vw - 32px);
     bottom: 84px;
+  }
+}
+
+/* ---- reduced motion -------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .sm-app *,
+  .sm-app *::before,
+  .sm-app *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
   }
 }

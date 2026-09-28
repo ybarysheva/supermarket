@@ -21,8 +21,9 @@
   const SHELF_H = 2.0;
   const CEILING = 4.5;
   const TAG_H = 0.08;
-  const PX_PER_M = 900; // price tag text resolution
-  const STOCK_RADIUS = 10; // stock shelves within this distance
+  const PX_PER_M = 700; // price tag text resolution
+  const STOCK_RADIUS = 10; // stock shelves within this distance…
+  const UNSTOCK_RADIUS = 24; // …and empty them again past this one, to save memory
 
   const C = {
     floorA: "#f2f2ed",
@@ -61,7 +62,11 @@
   const matCache = new Map();
 
   function lambert(color) {
-    if (!matCache.has(color)) matCache.set(color, new THREE.MeshLambertMaterial({ color }));
+    if (!matCache.has(color)) {
+      const m = new THREE.MeshLambertMaterial({ color });
+      m.userData.shared = true; // used all over the store; freed with the store
+      matCache.set(color, m);
+    }
     return matCache.get(color);
   }
 
@@ -185,20 +190,54 @@
     }
   }
 
-  const texCache = new Map();
-  function productTexture(url) {
-    if (!texCache.has(url)) {
-      texCache.set(
-        url,
-        limited(() => loadImageCanvas(url)).then(({ canvas, aspect }) => {
+  // Product photos are shared by every facing that shows them and counted,
+  // so a photo's GPU memory is freed once no stocked shelf uses it.
+  const texCache = new Map(); // url -> { promise, refs }
+
+  function acquireTexture(url) {
+    let entry = texCache.get(url);
+    if (!entry) {
+      entry = {
+        refs: 0,
+        promise: limited(() => loadImageCanvas(url)).then(({ canvas, aspect }) => {
           const t = new THREE.CanvasTexture(canvas);
           t.colorSpace = THREE.SRGBColorSpace;
           t.anisotropy = 4;
           return { texture: t, aspect };
-        })
-      );
+        }),
+      };
+      entry.promise.catch(() => texCache.delete(url));
+      texCache.set(url, entry);
     }
-    return texCache.get(url);
+    entry.refs++;
+    return entry.promise;
+  }
+
+  function releaseTexture(url) {
+    const entry = texCache.get(url);
+    if (!entry || --entry.refs > 0) return;
+    texCache.delete(url);
+    entry.promise.then(({ texture }) => texture.dispose(), () => {});
+  }
+
+  function releaseAllTextures() {
+    for (const [url, entry] of texCache) {
+      texCache.delete(url);
+      entry.promise.then(({ texture }) => texture.dispose(), () => {});
+    }
+  }
+
+  // Frees everything under an object that the GPU holds on to.
+  function disposeTree(root, keep) {
+    root.traverse((o) => {
+      if (o.geometry && o.geometry !== keep) o.geometry.dispose();
+      const mats = Array.isArray(o.material) ? o.material : o.material ? [o.material] : [];
+      for (const m of mats) {
+        if (m.userData.shared) continue;
+        if (m.map && !m.map.userData.shared) m.map.dispose();
+        m.dispose();
+      }
+    });
   }
 
   function labelTexture(name) {
@@ -231,15 +270,18 @@
       const h = S.h;
       unitBox = unitBox || new THREE.BoxGeometry(1, 1, 1);
 
-      this.renderer = new THREE.WebGLRenderer({ antialias: true });
-      this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      const coarse = window.matchMedia("(pointer: coarse)").matches;
+      this.reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: coarse ? "low-power" : "default" });
+      // Phones have very dense screens; 1.5× looks the same and draws far less.
+      this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, coarse ? 1.5 : 2));
       this.scene = new THREE.Scene();
       this.scene.background = new THREE.Color(0xeef0ec);
       this.scene.fog = new THREE.Fog(0xeef0ec, 14, 42);
       this.camera = new THREE.PerspectiveCamera(70, 1, 0.05, 90);
       this.raycaster = new THREE.Raycaster();
 
-      this.pickables = []; // things you can click
+      this.pickables = new Set(); // things you can click
       this.solids = []; // things that block clicks (shelves, walls)
       this.arrows = [];
       this.bays = [];
@@ -258,6 +300,11 @@
       this.el = h("div", { class: "sm-walk3d" });
       this.canvas = this.renderer.domElement;
       this.canvas.className = "sm-w-canvas";
+      this.onContextLost = (e) => {
+        e.preventDefault();
+        if (!this.destroyed) this.store.fallBackToFlat("graphics context lost");
+      };
+      this.canvas.addEventListener("webglcontextlost", this.onContextLost);
       this.locTitle = h("strong");
       this.locSides = h("div", { class: "sm-w-sides" });
       this.tooltip = h("div", { class: "sm-w-tip", hidden: true });
@@ -521,7 +568,7 @@
         g.add(lane2);
         for (const p of parts) {
           p.userData.checkout = true;
-          this.pickables.push(p);
+          this.pickables.add(p);
         }
       }
 
@@ -599,24 +646,46 @@
     stockNearby() {
       const near = [];
       for (const b of this.bays) {
-        if (b.state !== "empty") continue;
         const d = Math.hypot(b.fx - this.pos.x, b.fz - this.pos.z);
-        if (d < STOCK_RADIUS) near.push([d, b]);
+        if (b.state === "empty" && d < STOCK_RADIUS) near.push([d, b]);
+        else if (b.state !== "empty" && d > UNSTOCK_RADIUS) this.unstock(b);
       }
       near.sort((a, b) => a[0] - b[0]);
       for (const [, b] of near) this.stock(b);
     }
 
+    // Everything put on a bay's shelves lives in bay.stocked, so emptying
+    // the bay is one remove plus freeing what it used.
     stock(bay) {
       bay.state = "loading";
+      bay.stocked = new THREE.Group();
+      bay.group.add(bay.stocked);
+      bay.items = [];
+      bay.imageUrls = [];
+      const token = (bay.token = {});
       const s = this.store.shelf(bay.section.query);
       const done = () => {
-        if (this.destroyed) return;
+        if (this.destroyed || bay.token !== token) return;
         if (s.status === "ready") this.fill(bay, s.products);
         else this.shelfNote(bay, "Couldn't stock this shelf — click to try again", true);
+        this.invalidate();
       };
       if (s.status === "loading") s.promise.then(done);
       else done();
+    }
+
+    unstock(bay) {
+      bay.token = null;
+      bay.state = "empty";
+      if (!bay.stocked) return;
+      bay.stocked.traverse((o) => this.pickables.delete(o));
+      bay.group.remove(bay.stocked);
+      disposeTree(bay.stocked, unitBox);
+      for (const url of bay.imageUrls) releaseTexture(url);
+      bay.stocked = null;
+      bay.items = [];
+      bay.imageUrls = [];
+      this.invalidate();
     }
 
     shelfNote(bay, text, retry) {
@@ -639,10 +708,9 @@
       m.position.set(0, 1.0, FACE_D + 0.02);
       if (retry) {
         m.userData.retry = bay;
-        this.pickables.push(m);
+        this.pickables.add(m);
       }
-      bay.group.add(m);
-      bay.note = m;
+      bay.stocked.add(m);
     }
 
     fill(bay, products) {
@@ -676,8 +744,8 @@
           m.scale.set(pw, h0, 0.12);
           m.position.set(start + f * (pw + gap), y + h0 / 2, FACE_D - 0.1);
           m.userData.product = p;
-          bay.group.add(m);
-          this.pickables.push(m);
+          bay.stocked.add(m);
+          this.pickables.add(m);
           meshes.push(m);
         }
         const setHeight = (aspect) => {
@@ -687,16 +755,23 @@
             m.position.y = y + ht / 2;
           }
         };
+        const token = bay.token;
         if (p.image) {
-          productTexture(p.image).then(
+          bay.imageUrls.push(p.image);
+          acquireTexture(p.image).then(
             ({ texture, aspect }) => {
+              if (bay.token !== token) return;
+              texture.userData.shared = true; // owned by the cache, not the material
               front.map = texture;
               front.needsUpdate = true;
               setHeight(aspect);
+              this.invalidate();
             },
             () => {
+              if (bay.token !== token) return;
               front.map = labelTexture(p.name);
               front.needsUpdate = true;
+              this.invalidate();
             }
           );
         } else {
@@ -743,8 +818,8 @@
       const m = plane(tex, bay.w, TAG_H);
       m.position.set(0, y - TAG_H / 2, FACE_D + 0.003);
       m.userData.tags = { bay, items };
-      bay.group.add(m);
-      this.pickables.push(m);
+      bay.stocked.add(m);
+      this.pickables.add(m);
     }
 
     refreshBadges() {
@@ -754,7 +829,8 @@
           if (it.badgeQty === qty) continue;
           it.badgeQty = qty;
           if (it.badge) {
-            bay.group.remove(it.badge);
+            bay.stocked.remove(it.badge);
+            disposeTree(it.badge);
             it.badge = null;
           }
           if (!qty) continue;
@@ -772,10 +848,11 @@
           const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, toneMapped: false }));
           s.scale.set(0.15, 0.047, 1);
           s.position.set(it.x0 + it.slotW / 2, it.y + 0.04, FACE_D + 0.02);
-          bay.group.add(s);
+          bay.stocked.add(s);
           it.badge = s;
         }
       }
+      this.invalidate();
     }
 
     // ---- moving around -----------------------------------------------------
@@ -815,7 +892,8 @@
         this.arrive(lookAt, flash);
         return;
       }
-      this.move = { pts, segLen, seg: 0, t: 0, speed: Math.max(3.2, dist / 2.8), faceTravel, target, lookAt, flash };
+      const speed = this.reduceMotion ? Infinity : Math.max(3.2, dist / 2.8);
+      this.move = { pts, segLen, seg: 0, t: 0, speed, faceTravel, target, lookAt, flash };
     }
 
     finishMove() {
@@ -880,8 +958,12 @@
     }
 
     clearArrows() {
-      for (const a of this.arrows) this.scene.remove(a);
+      for (const a of this.arrows) {
+        this.scene.remove(a);
+        a.material.dispose();
+      }
       this.arrows = [];
+      this.invalidate();
     }
 
     showArrows() {
@@ -952,6 +1034,7 @@
             this.yawTarget = null;
             this.pitchTarget = null;
             this.hideTip();
+            this.invalidate();
           }
           drag.x = e.clientX;
           drag.y = e.clientY;
@@ -982,6 +1065,7 @@
     setFov(f) {
       this.camera.fov = clamp(f, 25, 75);
       this.camera.updateProjectionMatrix();
+      this.invalidate();
     }
 
     pick(clientX, clientY) {
@@ -1015,10 +1099,8 @@
       if (u.arrow) return this.walkTo(u.arrow);
       if (u.checkout) return this.store.toggleCart(true);
       if (u.retry) {
-        const bay = u.retry;
-        bay.group.remove(bay.note);
-        this.pickables.splice(this.pickables.indexOf(bay.note), 1);
-        return this.stock(bay);
+        this.unstock(u.retry);
+        return this.stock(u.retry);
       }
       if (u.floor) {
         let best = null;
@@ -1038,6 +1120,7 @@
       const at = this.hoverAt;
       if (!at) return;
       this.hoverAt = null;
+      this.invalidate(); // highlights may change
       const hit = this.pick(at.x, at.y);
       const u = hit ? hit.object.userData : {};
       const product = hit && this.productFromHit(hit);
@@ -1218,13 +1301,20 @@
       this.renderer.setSize(w, h, false);
       this.camera.aspect = w / h;
       this.camera.updateProjectionMatrix();
-      this.drawMinimap();
+      this.invalidate();
+    }
+
+    // Draw a frame only when something changed, so standing still in an
+    // aisle doesn't keep the GPU (and a phone's battery) busy.
+    invalidate() {
+      this.dirty = true;
     }
 
     start() {
       if (this.running) return;
       this.running = true;
       this.resize();
+      this.invalidate();
       let last = performance.now();
       let stockClock = 0;
       const loop = (t) => {
@@ -1237,7 +1327,11 @@
           stockClock = 0.35;
           this.stockNearby();
         }
-        this.renderer.render(this.scene, this.camera);
+        if (this.dirty) {
+          this.dirty = false;
+          this.renderer.render(this.scene, this.camera);
+          this.drawMinimap();
+        }
         this.raf = requestAnimationFrame(loop);
       };
       this.raf = requestAnimationFrame(loop);
@@ -1251,6 +1345,7 @@
 
     update(dt) {
       const m = this.move;
+      const easing = this.reduceMotion ? 1 : null;
       if (m) {
         m.t += dt * m.speed;
         while (m.seg < m.segLen.length && m.t > m.segLen[m.seg]) {
@@ -1265,18 +1360,21 @@
           this.pos = { x: a.x + (b.x - a.x) * f, z: a.z + (b.z - a.z) * f };
           if (m.faceTravel) this.yawTarget = Math.atan2(b.x - a.x, b.z - a.z);
         }
+        this.invalidate();
       }
       if (this.yawTarget != null) {
         const d = angleDiff(this.yaw, this.yawTarget);
         if (Math.abs(d) < 0.002) {
           this.yaw = this.yawTarget;
           this.yawTarget = null;
-        } else this.yaw += d * Math.min(1, dt * 7);
+        } else this.yaw += d * (easing ?? Math.min(1, dt * 7));
+        this.invalidate();
       }
       if (this.pitchTarget != null) {
         const d = this.pitchTarget - this.pitch;
         if (Math.abs(d) < 0.002) this.pitchTarget = null;
-        this.pitch += d * Math.min(1, dt * 5);
+        this.pitch += d * (easing ?? Math.min(1, dt * 5));
+        this.invalidate();
       }
       if (this.flashing) {
         const b = this.flashing;
@@ -1285,25 +1383,37 @@
           b.signMat.color.setHex(0xffffff);
           this.flashing = null;
         } else b.signMat.color.setHex(Math.floor(left / 260) % 2 ? 0xffe066 : 0xffffff);
+        this.invalidate();
       }
 
-      const cp = Math.cos(this.pitch);
-      this.camera.position.set(this.pos.x, EYE, this.pos.z);
-      this.camera.lookAt(this.pos.x + Math.sin(this.yaw) * cp, EYE + Math.sin(this.pitch), this.pos.z + Math.cos(this.yaw) * cp);
+      if (this.dirty) {
+        const cp = Math.cos(this.pitch);
+        this.camera.position.set(this.pos.x, EYE, this.pos.z);
+        this.camera.lookAt(this.pos.x + Math.sin(this.yaw) * cp, EYE + Math.sin(this.pitch), this.pos.z + Math.cos(this.yaw) * cp);
+      }
 
       if (this.move !== this.hudMove || Math.abs(angleDiff(this.hudYaw ?? 0, this.yaw)) > 0.2) {
         this.hudMove = this.move;
         this.updateHud();
       }
-      this.drawMinimap();
       this.hover();
     }
 
     destroy() {
+      if (this.destroyed) return;
       this.stop();
       this.destroyed = true;
       this.ro.disconnect();
+      this.canvas.removeEventListener("webglcontextlost", this.onContextLost);
+      for (const b of this.bays) b.token = null;
+      disposeTree(this.scene);
+      for (const m of matCache.values()) m.dispose();
+      matCache.clear();
+      releaseAllTextures();
       this.renderer.dispose();
+      // Browsers allow only a handful of live WebGL contexts per page, so
+      // give this one back now rather than whenever it's garbage collected.
+      this.renderer.forceContextLoss();
     }
   }
 

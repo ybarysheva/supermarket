@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Supermarket Mode",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Shop Amazon Fresh and Whole Foods like you're walking through a real supermarket: aisles, shelves, price tags, a cart and a shopping list.",
   "icons": {
     "16": "icons/icon16.png",
@@ -16,12 +16,17 @@
     }
   },
   "background": {
-    "service_worker": "src/background.js"
+    "service_worker": "src/background.js",
+    "scripts": ["src/background.js"]
   },
-  "permissions": [
-    "activeTab",
-    "scripting"
-  ],
+  "minimum_chrome_version": "121",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "supermarket-mode@ybarysheva",
+      "strict_min_version": "128.0"
+    }
+  },
+  "permissions": ["scripting"],
   "host_permissions": [
     "https://www.amazon.com/*",
     "https://m.media-amazon.com/*",
@@ -29,29 +34,15 @@
   ],
   "content_scripts": [
     {
-      "matches": [
-        "https://www.amazon.com/*"
-      ],
-      "js": [
-        "src/vendor/three.min.js",
-        "src/layout.js",
-        "src/adapters/amazon.js",
-        "src/adapters/demo.js",
-        "src/ui.js",
-        "src/walk3d.js",
-        "src/content.js"
-      ],
+      "matches": ["https://www.amazon.com/*"],
+      "js": ["src/content.js"],
       "run_at": "document_idle"
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": [
-        "src/store.css"
-      ],
-      "matches": [
-        "https://www.amazon.com/*"
-      ]
+      "resources": ["src/store.css"],
+      "matches": ["https://www.amazon.com/*"]
     }
   ]
 }
