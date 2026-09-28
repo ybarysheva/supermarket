@@ -112,10 +112,10 @@ and the store's own brand next to the leader. The brand comes from the
 Brands list on Amazon's search pages, or the product name. Amazon sends 24
 products at a time, so while you stand at a shelf it keeps fetching the
 next 24 until the shelf is full or the category runs out, and the rest of
-the shelf stays empty until then. If a category has more products than
-its shelf holds, a yellow **More ▸** tag on the shelf puts up the next
-ones (and goes back to the first after the last). In the flat view it's
-a **More from this shelf** button.
+the shelf stays empty until then. Like a real store, a shelf carries the
+category's best sellers, as many as fit; for anything else, ask ("Excuse
+me, where's the…") and it's searched for. If a category comes up empty on
+Amazon, its shelf searches for the category's name instead.
 
 At checkout, after putting everything in your Amazon cart, the extension
 reads the cart back to check it's all there (Amazon sometimes quietly

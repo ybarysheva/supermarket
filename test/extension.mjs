@@ -80,6 +80,8 @@ await context.route("https://www.amazon.com/**", async (route) => {
   if (u.pathname === "/s") {
     const page = Number(u.searchParams.get("page") || 1);
     seen.searches.push({ k: u.searchParams.get("k"), i: u.searchParams.get("i"), rh: u.searchParams.get("rh"), page });
+    // Some categories list nothing when browsed directly.
+    if (!u.searchParams.get("k") && u.searchParams.get("rh") === "n:778") return route.fulfill(html("<html><body></body></html>"));
     // Browsing a category (no search words): name its products after it.
     return route.fulfill(html(resultsPage(u.searchParams.get("k") || u.searchParams.get("rh"), u.searchParams.get("i"), page)));
   }
@@ -144,6 +146,7 @@ await page.locator(".sm-ask button").click();
 const nutButters = (s) => s.rh === "n:777" && !s.k;
 t.check("asking walks to the category's shelf, which shows that category", await until(() => seen.searches.some(nutButters)), seen.searches);
 t.check("standing at the shelf, it fetches the category's next page", await until(() => seen.searches.some((s) => nutButters(s) && s.page === 2)), seen.searches.filter(nutButters));
+t.check("a category that lists nothing is searched for by name in its department", await until(() => seen.searches.some((s) => s.k === "Pasta Noodles" && s.rh === "n:18787303011")), seen.searches.filter((s) => /778|Pasta/.test(s.rh + s.k)));
 t.check("each department page is read once", seen.departmentPages.filter((n) => n === "18787303011").length === 1, seen.departmentPages);
 await page.waitForTimeout(3000);
 await page.locator(".sm-w-tools button", { hasText: "Flat shelves" }).click();
