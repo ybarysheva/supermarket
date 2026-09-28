@@ -95,10 +95,20 @@ where extensions can run:
 
 The extension doesn't use a server. The shelves are filled by running
 ordinary Amazon searches in the background of the page you're already
-signed in to, one search per shelf section. For example, the "Spreads"
-shelf searches for `peanut butter jam nutella`. Only the shelves you walk
-past get loaded, and at most two load at a time, so Amazon doesn't think
-you're a bot.
+signed in to, one search per shelf section. For example, the "Peanut
+Butter & Spreads" shelf searches for `peanut butter jam nutella`.
+
+Each shelf searches within Amazon's own category for it when it can. The
+first time you shop a department, the extension reads that department's
+page on Amazon to learn its subcategories (kept for a week), and matches
+them to our shelves by name: Cereal searches within Cereals, Apples within
+Fresh Fruit. If a category turns out too narrow, the shelf widens to the
+whole department, then to all of Amazon Fresh, so it's never emptier than
+a plain search. Categories that none of our shelves cover get their own
+shelves in the **More to explore** aisle, so every product has a place.
+
+Only the shelves you walk past get loaded, and at most two searches go to
+Amazon at a time, so Amazon doesn't think you're a bot.
 
 ```
 src/

@@ -6,12 +6,13 @@ import { launch, root, checker } from "./helpers.mjs";
 const fixture = readFileSync(root + "test/amazon-fixture.html", "utf8");
 // Product cards from a real Amazon Fresh search page (scrubbed).
 const real = readFileSync(root + "test/amazon-fresh-search.html", "utf8");
+const bar = readFileSync(root + "test/amazon-browse-bar.html", "utf8");
 const browser = await launch();
 const page = await browser.newPage();
 await page.goto("file://" + root + "playground/index.html");
 await page.addScriptTag({ path: root + "src/adapters/amazon.js" });
 
-const result = await page.evaluate(async ({ html, realHtml }) => {
+const result = await page.evaluate(async ({ html, realHtml, barHtml }) => {
   const S = window.Supermarket;
   const products = S.adapters._parseAmazonResults(html, "https://www.amazon.com");
 
@@ -59,8 +60,41 @@ const result = await page.evaluate(async ({ html, realHtml }) => {
 
   const realProducts = S.adapters._parseAmazonResults(realHtml, "https://www.amazon.com");
 
-  return { products, captcha, sent, added, noForm, cartUrl: fresh.cartUrl(), retried, refreshed, signedOut, evil, realProducts };
-}, { html: fixture, realHtml: real });
+  // Categories: read the browse bar, and match subcategories to our shelves.
+  const C = S.adapters._amazonCategories;
+  const departments = C.parseDepartments(barHtml);
+  const subs = C.parseSubcategories(barHtml, "6506977011");
+  const dept = (name, node, ...subs) => ({ name, node, subs: subs.map(([n, s]) => ({ node: n, name: s })) });
+  const tree = {
+    departments: [
+      dept("Produce", "p", ["p1", "Fresh Fruit"], ["p2", "Fresh Vegetables"], ["p3", "Fresh Herbs"], ["p4", "Nuts & Seeds"], ["p5", "Dried Fruits & Vegetables"], ["p6", "Fresh Cut & Packaged"]),
+      dept("Breakfast Foods", "b", ["b1", "Cereals"], ["b2", "Oatmeal & Hot Cereals"], ["b3", "Breakfast Bars"]),
+      dept("Pantry Staples", "s", ["s1", "Pasta & Noodles"], ["s2", "Canned & Jarred Food"]),
+      dept("Dairy, Eggs & Cheese", "d", ["d1", "Milk & Cream"], ["d2", "Eggs"], ["d3", "Cheese"]),
+      dept("Frozen Foods", "f", ["f1", "Ice Cream & Novelties"], ["f2", "Frozen Pizza"]),
+      dept("Snack Foods", "n", ["n1", "Chips & Crisps"], ["n2", "Puffed Snacks"]),
+    ],
+  };
+  const where = (placeId, sectionName) => {
+    const place = S.place(placeId);
+    const section = place.sides.flatMap((sd) => sd.sections).find((x) => x.name === sectionName);
+    return C.categoryChain(section, place, tree).map((c) => c.name);
+  };
+  const mapping = {
+    cereal: where("a1", "Cereal"),
+    oatmeal: where("a1", "Oatmeal & Hot Cereal"),
+    apples: where("produce", "Apples & Pears"),
+    potatoes: where("produce", "Potatoes"),
+    milk: where("dairy", "Milk"),
+    icecream: where("frozen", "Ice Cream"),
+    chips: where("a7", "Potato Chips"),
+    pasta: where("a4", "Pasta"),
+    toilet: where("a10", "Toilet Paper"),
+  };
+  const leftover = C.unclaimed(tree, S.allPlaces()).map((c) => c.name);
+
+  return { products, captcha, sent, added, noForm, cartUrl: fresh.cartUrl(), retried, refreshed, signedOut, evil, realProducts, departments, subs, mapping, leftover };
+}, { html: fixture, realHtml: real, barHtml: bar });
 await browser.close();
 
 const checks = [
@@ -82,6 +116,22 @@ const checks = [
   ["drops javascript: links", result.evil.url === "https://www.amazon.com/dp/B0EVIL" && result.evil.image === null],
 ];
 const rp = result.realProducts;
+const m = result.mapping;
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+checks.push(
+  ["browse bar: reads the departments", same(result.departments.map((d) => d.name), ["Produce", "Pantry Staples", "Dairy, Eggs & Cheese"]) && result.departments[1].node === "18787303011"],
+  ["browse bar: reads the subcategories (not Featured)", same(result.subs.map((d) => d.name), ["Fresh Vegetables", "Fresh Fruit", "Fresh Herbs"]) && result.subs[1].node === "16318981"],
+  ["categories: Cereal shelf searches Cereals", m.cereal[0] === "Cereals"],
+  ["categories: Oatmeal shelf searches Oatmeal & Hot Cereals", m.oatmeal[0] === "Oatmeal & Hot Cereals"],
+  ["categories: Apples searches Fresh Fruit, then all of Produce", same(m.apples, ["Fresh Fruit", "Produce"]), m.apples],
+  ["categories: Potatoes searches Fresh Vegetables, then Produce", same(m.potatoes, ["Fresh Vegetables", "Produce"]), m.potatoes],
+  ["categories: Milk searches Milk & Cream", m.milk[0] === "Milk & Cream"],
+  ["categories: Ice Cream searches Ice Cream & Novelties", m.icecream[0] === "Ice Cream & Novelties"],
+  ["categories: Potato Chips searches Chips & Crisps", m.chips[0] === "Chips & Crisps"],
+  ["categories: Pasta searches Pasta & Noodles", m.pasta[0] === "Pasta & Noodles"],
+  ["categories: no match means search the whole store", m.toilet.length === 0],
+  ["categories: unclaimed ones go to More to explore", result.leftover.length > 0 && !result.leftover.includes("Fresh Fruit") && !result.leftover.includes("Cereals"), result.leftover]
+);
 checks.push(
   ["real page: finds the products", rp.length >= 6],
   ["real page: every product has a name, price and photo", rp.every((p) => p.name && p.price > 0 && p.image)],

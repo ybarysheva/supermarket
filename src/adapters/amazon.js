@@ -160,20 +160,218 @@
     return products;
   }
 
+  // ---- the store's own categories ----------------------------------------
+  //
+  // Amazon Fresh sorts every product into departments (Produce, Pantry
+  // Staples…) and subcategories (Fresh Fruit, Nut & Seed Butters…). Each
+  // department page has a bar listing its subcategories. We read those
+  // pages lazily (the first time a shelf in that department is needed),
+  // keep them for a week, and give each shelf of ours the subcategory that
+  // matches it best, so its search stays within the right part of the store.
+
+  const CATEGORY_DAYS = 7;
+
+  // Where each of our places lives among Amazon's departments (matched by
+  // name). `whole`: every product in that department belongs to the place,
+  // so a shelf with no better match can still search within it.
+  const DEPARTMENTS = {
+    produce: { names: ["produce"], whole: true },
+    bakery: { names: ["bakery"], whole: true },
+    deli: { names: ["deli"], whole: true },
+    meat: { names: ["meat"], whole: true },
+    dairy: { names: ["dairy"], whole: true },
+    frozen: { names: ["frozen"], whole: true },
+    drinks: { names: ["beverage"] },
+    a1: { names: ["breakfast", "beverage", "pantry"] },
+    a2: { names: ["pantry"] },
+    a3: { names: ["pantry"] },
+    a4: { names: ["pantry"] },
+    a5: { names: ["pantry"] },
+    a6: { names: ["pantry"] },
+    a7: { names: ["snack"] },
+    a8: { names: ["snack", "pantry"] },
+    a9: { names: ["beverage"] },
+    a10: { names: ["household"] },
+    a11: { names: ["personal care", "health"] },
+    a12: { names: ["baby", "pet"] },
+    more: { names: ["office"] },
+  };
+
+  // If a store's front page can't be read, Amazon Fresh's departments as of
+  // September 2026 (see docs/store-plan.md).
+  const FRESH_DEPARTMENTS = [
+    ["6506977011", "Produce"], ["18787303011", "Pantry Staples"], ["371460011", "Dairy, Eggs & Cheese"],
+    ["371469011", "Meat & Seafood"], ["16318751", "Breads & Bakery"], ["16322721", "Snack Foods"],
+    ["18773724011", "Deli & Prepared Foods"], ["6459122011", "Frozen Foods"], ["16310231", "Beverages"],
+    ["16310251", "Breakfast Foods"], ["15342811", "Household"], ["3760911", "Personal Care"],
+    ["2619533011", "Pet"], ["3760941", "Health & Wellness"], ["10787321", "Baby Food & Care"],
+    ["1064954", "Office & School"],
+  ].map(([node, name]) => ({ node, name }));
+
+  // Amazon's browse bar, on every store page: departments are "aisles"
+  // (class …_aislesNode__…, plus the current one, …_categoryNodeDesktop__…)
+  // and the current department's subcategories are …_categoryNode__….
+  // Each carries its category id in data-browse-node-id (or id="x<id>").
+  function browseBar(html, selector) {
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const out = [];
+    const seen = new Set();
+    for (const el of doc.querySelectorAll(selector)) {
+      const link = el.getAttribute("data-node-link") || "";
+      const node = el.getAttribute("data-browse-node-id") || (el.id.match(/^x(\d+)$/) || [])[1] || (link.match(/[?&]node=(\d+)/) || [])[1];
+      const name = text(el) || el.querySelector("img[alt]")?.getAttribute("alt") || "";
+      if (!node || !name || name.length > 50 || seen.has(node) || /^featured$/i.test(name)) continue;
+      seen.add(node);
+      out.push({ node, name });
+    }
+    return out;
+  }
+
+  const parseDepartments = (html) => browseBar(html, '[class*="_aislesNode__"], [class*="_categoryNodeDesktop__"]');
+  const parseSubcategories = (html, deptNode) => browseBar(html, '[class*="_categoryNode__"]').filter((c) => c.node !== deptNode);
+
+  // Words that say what a category is ("Fresh" and "&" don't).
+  const STOP = new Set(["fresh", "and", "the", "for", "foods", "food", "more", "other", "all", "your"]);
+  const words = (s) => s.toLowerCase().split(/[^a-z]+/).filter((w) => w.length > 2 && !STOP.has(w));
+  const sameWord = (a, b) => a === b || (a.length >= 4 && b.length >= 4 && (a.startsWith(b) || b.startsWith(a)));
+
+  // Where a shelf should search, narrowest first: its best-matching
+  // subcategory, then its whole department when that department belongs to
+  // it entirely (Produce, Dairy…). Empty means search the whole store.
+  // `tree` is { departments: [{ node, name, subs: [{ node, name }] }] }.
+  function categoryChain(section, place, tree) {
+    if (section.category) return [section.category];
+    const hint = place && DEPARTMENTS[place.id];
+    if (!hint || !tree) return [];
+    const depts = tree.departments.filter((d) => hint.names.some((n) => d.name.toLowerCase().includes(n)));
+    const side = place.sides.find((sd) => sd.sections.includes(section));
+    const strong = words([section.name, ...section.keywords].join(" "));
+    const weak = side ? words(side.label) : [];
+    let best = null;
+    let bestScore = 0;
+    for (const d of depts) {
+      for (const sub of d.subs || []) {
+        const score = words(sub.name).reduce((t, w) => t + (strong.some((x) => sameWord(x, w)) ? 2 : weak.some((x) => sameWord(x, w)) ? 1 : 0), 0);
+        if (score > bestScore) {
+          best = sub;
+          bestScore = score;
+        }
+      }
+    }
+    const chain = [];
+    if (best) chain.push(best);
+    if (hint.whole && depts.length) chain.push(depts[0]);
+    return chain;
+  }
+
+  const categoryFor = (section, place, tree) => categoryChain(section, place, tree)[0] || null;
+
+  // Subcategories no shelf searches within, for More to explore.
+  function unclaimed(tree, places) {
+    if (!tree) return [];
+    const claimed = new Set();
+    for (const place of places) for (const side of place.sides) for (const sec of side.sections) {
+      const cat = categoryFor(sec, place, tree);
+      if (cat) claimed.add(cat.node);
+    }
+    const out = [];
+    for (const d of tree.departments) for (const sub of d.subs || []) if (!claimed.has(sub.node)) out.push({ ...sub, department: d.name });
+    return out;
+  }
+
   function makeAdapter(store) {
     const origin = location.origin.includes("amazon.") ? location.origin : "https://www.amazon.com";
 
-    async function fetchResults(query) {
+
+    // The store's category tree, read lazily and kept for a week:
+    // { at, departments: [{ node, name, subs: null | [{ node, name }] }] }
+    const treeKey = `supermarket:categories:${store.id}`;
+    let tree = loadTree();
+
+    function loadTree() {
+      try {
+        const t = JSON.parse(localStorage.getItem(treeKey));
+        if (t && Date.now() - t.at < CATEGORY_DAYS * 86400000) return t;
+      } catch {
+        /* no stored tree */
+      }
+      return null;
+    }
+
+    function saveTree() {
+      try {
+        localStorage.setItem(treeKey, JSON.stringify(tree));
+      } catch {
+        /* full or blocked: it'll be read again next time */
+      }
+    }
+
+    async function fetchPage(url) {
+      const res = await throttle(() => pageFetch(url, { credentials: "include" }));
+      if (signedOut(res)) throw new Error(SIGN_IN);
+      if (!res.ok) throw new Error(`The store didn't answer (HTTP ${res.status}).`);
+      return res.text();
+    }
+
+    // Pages being read right now, shared by every shelf that needs them.
+    const reading = new Map();
+    const once = (key, fn) => {
+      if (!reading.has(key)) reading.set(key, fn().finally(() => reading.delete(key)));
+      return reading.get(key);
+    };
+
+    function departments() {
+      return tree ? Promise.resolve(tree) : once("departments", readDepartments);
+    }
+
+    async function readDepartments() {
+      let depts = [];
+      try {
+        depts = parseDepartments(await fetchPage(`${origin}/alm/storefront?almBrandId=${store.almBrandId}`));
+      } catch {
+        /* fall back below */
+      }
+      if (depts.length < 5 && store.id === "fresh") depts = FRESH_DEPARTMENTS;
+      tree = { at: Date.now(), departments: depts.map((d) => ({ ...d, subs: null })) };
+      saveTree();
+      return tree;
+    }
+
+    // Make sure the departments a place lives in have their subcategories.
+    async function ensureTreeFor(place) {
+      const hint = place && DEPARTMENTS[place.id];
+      if (!hint) return tree;
+      await departments();
+      const needed = tree.departments.filter((d) => !d.subs && hint.names.some((n) => d.name.toLowerCase().includes(n)));
+      await Promise.all(needed.map((d) => once(d.node, () => readSubcategories(d))));
+      return tree;
+    }
+
+    async function readSubcategories(d) {
+      try {
+        d.subs = parseSubcategories(await fetchPage(`${origin}/alm/category/?almBrandId=${store.almBrandId}&node=${d.node}`), d.node);
+      } catch {
+        d.subs = []; // try again next week
+      }
+      saveTree();
+    }
+
+
+    async function fetchResults(query, node) {
       const url = new URL("/s", origin);
-      url.searchParams.set("k", query);
+      if (query) url.searchParams.set("k", query);
       url.searchParams.set("i", store.searchIndex);
-      const html = await throttle(async () => {
-        const res = await pageFetch(url.href, { credentials: "include" });
-        if (signedOut(res)) throw new Error(SIGN_IN);
-        if (!res.ok) throw new Error(`The store didn't answer (HTTP ${res.status}).`);
-        return res.text();
-      });
-      return parseResults(html, origin);
+      if (node) url.searchParams.set("rh", `n:${node}`);
+      return parseResults(await fetchPage(url.href), origin);
+    }
+
+    async function cachedResults(query, node) {
+      const key = `supermarket:${store.id}:${node || ""}:${query}`;
+      const cached = cacheGet(key);
+      if (cached) return cached;
+      const products = await fetchResults(query, node);
+      cacheSet(key, products);
+      return products;
     }
 
     async function postForm(form, qty) {
@@ -196,14 +394,41 @@
       name: store.name,
       tagline: store.tagline,
 
-      async search(query) {
-        const key = `supermarket:${store.id}:${query}`;
-        const cached = cacheGet(key);
-        if (cached) return cached;
-        const products = await fetchResults(query);
-        cacheSet(key, products);
-        return products;
+
+      search(query) {
+        return cachedResults(query);
       },
+
+      // A shelf's products: its words, within its category when we know it.
+      // If a category turns out too narrow (under 4 products), widen to the
+      // next one, then the whole store, so a wrong match never empties a shelf.
+      async searchShelf(section, place) {
+        let chain = [];
+        try {
+          chain = categoryChain(section, place, await ensureTreeFor(place));
+        } catch {
+          /* no categories: plain search */
+        }
+        for (const cat of chain) {
+          const products = await cachedResults(section.query, cat.node);
+          if (products.length >= 4 || !section.query) return products;
+        }
+        return cachedResults(section.query);
+      },
+
+      // Categories no shelf covers, for the More to explore aisle.
+      moreSections(places) {
+        return unclaimed(tree, places).map((c) => ({
+          id: `more/${store.id}-${c.node}`,
+          name: c.name,
+          query: "",
+          keywords: [c.name.toLowerCase()],
+          bays: 1,
+          category: c,
+        }));
+      },
+
+      categoryFor: (section, place) => categoryFor(section, place, tree),
 
       // The add form carries a one-time token that expires, and carts are
       // kept between visits. If the saved form fails (or there isn't one),
@@ -233,4 +458,5 @@
   S.adapters.fresh = () => makeAdapter(STORES.fresh);
   S.adapters.wholefoods = () => makeAdapter(STORES.wholefoods);
   S.adapters._parseAmazonResults = parseResults; // exposed for tests
+  S.adapters._amazonCategories = { parseDepartments, parseSubcategories, categoryFor, categoryChain, unclaimed };
 })();
