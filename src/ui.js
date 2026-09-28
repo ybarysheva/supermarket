@@ -29,7 +29,6 @@
   // searches (Amazon answers with a captcha), so walk the aisles politely.
   const MAX_REQUESTS = 2;
   const shelfKey = (section) => section.id || section.query;
-  const MAX_MORE = 16; // extra category shelves in More to explore
 
   const money = (n) => `$${n.toFixed(2)}`;
 
@@ -141,29 +140,52 @@
 
     // ---- store & navigation ------------------------------------------------
 
-    enterStore(id) {
-      this.adapter = S.adapters[id]();
+    // The store's aisles come from its own departments and categories, so
+    // the first visit reads them (the adapter keeps them for a while).
+    async enterStore(id) {
+      const adapter = (this.adapter = S.adapters[id]());
+      this.ready = false;
+      this.setupError = null;
       this.shelves.clear();
       this.basket = new Map(load(`supermarket:basket:${id}`, []).map((it) => [it.product.id, it]));
-      this.fillMoreToExplore();
       if (this.walker) this.walker.destroy();
       this.walker = null;
+      this.view = "setup";
+      this.render();
+      let catalog = [];
+      try {
+        catalog = await adapter.catalog();
+      } catch (e) {
+        this.setupError = e;
+      }
+      if (this.adapter !== adapter) return; // switched stores meanwhile
+      if (!catalog.length) {
+        this.setupError = this.setupError || new Error(`Couldn't read ${adapter.name}'s aisles. Check you're signed in to Amazon, then try again.`);
+        this.render();
+        return;
+      }
+      this.setupError = null;
+      S.useLayout(S.buildLayout(catalog));
+      this.ready = true;
       // With 3D available you start at the entrance, looking into the store.
       this.view = this.use3d ? "walk" : "map";
       this.render();
     }
 
-    // Categories this store has that none of our shelves cover get their own
-    // shelves in More to explore, so every product has a place. The store
-    // learns its categories as you shop, so this grows over the first visits.
-    fillMoreToExplore() {
-      const more = S.place("more");
-      if (!more) return;
-      const side = more.sides[more.sides.length - 1];
-      side.baseSections = side.baseSections || side.sections.slice();
-      side.sections = side.baseSections.slice();
-      const extra = this.adapter.moreSections ? this.adapter.moreSections(S.allPlaces()) : [];
-      side.sections.push(...extra.slice(0, MAX_MORE));
+    renderSetup() {
+      const e = this.setupError;
+      if (!e) {
+        return h("div", { class: "sm-setup" },
+          h("div", { class: "sm-setup-cart" }, "🛒"),
+          h("h2", {}, "Setting up the store…"),
+          h("p", {}, `Reading ${this.adapter.name}'s aisles. This takes a few seconds the first time.`)
+        );
+      }
+      return h("div", { class: "sm-setup" },
+        h("h2", {}, "Couldn't set up the store"),
+        h("p", {}, e.message || String(e)),
+        h("button", { class: "sm-primary", onclick: () => this.enterStore(this.adapter.id) }, "Try again")
+      );
     }
 
     // Walk to a shelf: in 3D when we can, otherwise the flat shelf view.
@@ -501,7 +523,7 @@
     }
 
     renderTop() {
-      const inStore = !!this.adapter;
+      const inStore = !!this.adapter && this.ready;
       const input = h("input", { type: "search", placeholder: "Excuse me, where's the…", "aria-label": "Ask where something is" });
       this.el.top.replaceChildren(
         h("button", { class: "sm-brand", onclick: () => inStore && this.goMap(), title: "Store map" }, h("span", { class: "sm-brand-icon" }, "🛒"), h("span", {}, inStore ? this.adapter.name : "Supermarket")),
@@ -514,7 +536,7 @@
             h("button", { type: "submit" }, "Ask")
           ),
         h("div", { class: "sm-top-actions" },
-          inStore && this.opts.stores.length > 1 && h("button", { class: "sm-ghost", onclick: () => { this.adapter = null; this.view = "entrance"; this.render(); } }, "Switch store"),
+          inStore && this.opts.stores.length > 1 && h("button", { class: "sm-ghost", onclick: () => { this.adapter = null; this.ready = false; this.view = "entrance"; this.render(); } }, "Switch store"),
           inStore && h("button", { class: "sm-ghost", onclick: () => { this.listOpen = !this.listOpen; this.renderList(); } }, "📝 List"),
           h("button", { class: "sm-ghost sm-exit", onclick: () => this.close(), title: "Leave the supermarket and go back to the regular site" }, "Leave ✕")
         )
@@ -539,7 +561,8 @@
         }
         m.replaceChildren(this.walker.el);
         this.walker.start();
-      } else if (this.view === "entrance") m.replaceChildren(this.renderEntrance());
+      } else if (this.view === "setup") m.replaceChildren(this.renderSetup());
+      else if (this.view === "entrance") m.replaceChildren(this.renderEntrance());
       else if (this.view === "map") m.replaceChildren(this.renderMap());
       else m.replaceChildren(...this.renderAisle().filter(Boolean));
       if (this.view === "aisle") this.afterAisleMounted();
@@ -587,7 +610,7 @@
       const aisleTile = (place) =>
         h("button", { class: `sm-aisle-tile${place.cold ? " cold" : ""}`, onclick: () => this.goTo(place), title: place.label },
           h("span", { class: "sm-aisle-num" }, place.number),
-          h("span", { class: "sm-aisle-contents" }, place.sides.map((s) => h("span", {}, s.label))),
+          h("span", { class: "sm-aisle-contents" }, [...new Set(place.sides.map((s) => s.label))].map((l) => h("span", {}, l))),
           pin(place)
         );
 
@@ -600,9 +623,9 @@
         h("div", { class: "sm-floor" },
           h("div", { class: "sm-back-row" }, back.map((p) => deptTile(p))),
           h("div", { class: "sm-middle" },
-            h("div", { class: "sm-wall-col" }, deptTile(P("dairy"), 1), deptTile(P("drinks"))),
+            h("div", { class: "sm-wall-col" }, plan.map.left.map((id) => deptTile(P(id)))),
             plan.corridors.filter((c) => c.place).map((c) => aisleTile(P(c.place))),
-            h("div", { class: "sm-wall-col wide" }, deptTile(P("bakery")), deptTile(P("produce")))
+            h("div", { class: "sm-wall-col wide" }, plan.map.right.map((id) => deptTile(P(id))))
           ),
           h("div", { class: "sm-front-row" },
             h("button", { class: "sm-checkout-tile", onclick: () => this.toggleCart(true) }, "🧾 Checkout lanes"),

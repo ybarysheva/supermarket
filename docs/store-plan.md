@@ -5,44 +5,49 @@ every product in a real grocery catalog finds a place on a shelf.
 
 ## How it fits together
 
-- **Our category list** (`src/layout.js`): about 150 grocery categories
-  (Cereal, Yogurt, Frozen Pizza…). Each one knows its aisle, its fixture and
-  how much shelf space it gets. The list is the same for every store,
-  because grocery categories are nearly the same everywhere.
-- **The floor plan**: fixed aisles and departments, like a real supermarket.
-- **One translation table per store**: e.g. "Amazon Fresh: Fresh Fruit →
-  our Fruit". Anything unmapped goes to **More to explore**, so every
-  product has a place. A shelf with no matching store category falls back
-  to a keyword search (what shelves did before categories).
+- **The store's own categories**: its departments (Produce, Pantry
+  Staples, Pet…) and each department's subcategories (Cat Food, Dog
+  Treats…). Amazon lists them on its department pages; the first visit
+  reads them all (a few seconds) and keeps them for a week.
+- **The floor plan is built from them** (`src/layout.js`): each department
+  becomes a department or aisle, each subcategory a shelf, using Amazon's
+  names. A shelf shows everything in its category, the store's best
+  sellers first, so nothing needs matching and every product has a place.
+- **General supermarket rules**, not a category list, decide where things
+  go and what they're displayed on: a department called "…frozen…" gets
+  glass-door freezers, "produce" gets tables by the entrance, meat, deli
+  and bakery go around the back wall, and so on. They work for any grocery
+  store's names.
 
-## Floor plan (full size)
+## Floor plan
 
 Standard US design: fresh food around the walls, packaged goods in the
 middle, dairy at the back so you pass everything else on the way.
 
 ```
  ┌──────────── BACK WALL ─────────────────────────────┐
- │ DAIRY │ SEAFOOD │ MEAT │ PREPARED │ DELI │ BAKERY   │
- ├───────┴─────────┴──────┴──────────┴──────┴─────────┤
- │ D  │ FROZEN │ More │ 12 11 … 2 1 │ PRODUCE          │
- │ R  │ (glass │  to  │ center      │ (tables, misted  │
- │ I  │ doors) │explore│ aisles     │  greens, bread   │
- │ N  │        │      │             │  racks on wall)  │
- │ K  │        │      │             │                  │
- │ S  │ ice cream chests            │                  │
- ├────┴──────────────┬──────────────┴──────────────────┤
- │ CHECKOUT LANES    │                  ENTRANCE ⇩      │
- └───────────────────┴──────────────────────────────────┘
+ │ DAIRY │ MEAT & SEAFOOD │ DELI │ BAKERY CASES        │
+ ├───────┴────────────────┴──────┴─────────────────────┤
+ │ D  │ FROZEN │ N … 3 2 1              │ PRODUCE        │
+ │ A  │ (glass │ center aisles: every   │ (tables, misted│
+ │ I  │ doors) │ other department, in   │  greens, bread │
+ │ R  │        │ the store's own order  │  racks)        │
+ │ Y  │ ice cream chests                │                │
+ ├────┴──────────────────┬─────────────┴────────────────┤
+ │ CHECKOUT LANES        │                  ENTRANCE ⇩   │
+ └───────────────────────┴───────────────────────────────┘
 ```
 
-Center aisles: 1 Breakfast & coffee · 2 Baking & spices · 3 Soup & canned
-· 4 Pasta, rice & beans · 5 International · 6 Condiments, oils & dressings
-· 7 Snacks · 8 Cookies, crackers & candy · 9 Water, soda & drinks
-· 10 Household & paper · 11 Health & personal care · 12 Baby & pet.
-
-Beer & wine: not in the first version (sold only in some areas, needs ID
-at delivery). Space is kept for it; until then Amazon's alcohol goes to
-More to explore.
+- **Center aisles**: each department's shelves in runs of up to 8, one run
+  per side of an aisle; a big department fills several aisles, two small
+  ones share one.
+- **Fresh departments** (by name): produce, bakery, meat & seafood, deli,
+  dairy, frozen. Inside them, a category's name picks its fixture: herbs
+  and salad greens on the misted rack, cut fruit on the cooler, bread on
+  racks, cakes in the bakery case, ice cream novelties in the chests,
+  seafood on its own counter on ice.
+- Beer & wine: not in the first version (sold only in some areas, needs ID
+  at delivery), so alcohol departments are left out.
 
 ## Fixtures
 
@@ -60,10 +65,9 @@ More to explore.
 ## Every product, without a giant store
 
 - Real-store shelf spacing: one of each product, about 20 cm each (30 cm
-  per produce crate), so a 1.2 m section with 5 shelves holds 25.
-- Fixed shelf space per category; if the store has more products than
-  fit, the last section gets a "More →" tag that restocks with the next
-  page while you stand there.
+  per produce crate).
+- A shelf that has more products than room gets a "More ▸" tag that puts
+  up the next ones while you stand there.
 - Best sellers at eye level; less popular on high and low shelves.
 - Shelves fill as you walk up, the one you're heading to first, two
   requests to the store at a time; far shelves are emptied to save memory.
@@ -74,7 +78,9 @@ More to explore.
    still filled by keyword searches.
 2. **Category shelves.** Amazon translation table, More to explore.
 3. **Full shelves.** Real density, "More →" restocking, eye-level order.
-4. **Polish.** Aisle-end deals, seasonal display, flowers.
+4. **The store's own aisles.** The floor plan is built from the store's
+   departments and categories; no category list or translation table.
+5. **Polish.** Aisle-end deals, seasonal display, flowers.
 
 ## What Amazon Fresh looks like (from a saved Produce page)
 
@@ -113,35 +119,12 @@ More to explore.
   price repeated for screen readers. `test/amazon-fresh-search.html` holds
   scrubbed cards from this page for the parser tests.
 
-## Phase 2: category shelves (built)
+## Phase 2: category shelves (replaced by phase 4)
 
-In `src/adapters/amazon.js`:
-
-1. **Departments** come from the browse bar on the store's front page
-   (`…_aislesNode__…` links, each with `data-browse-node-id`). If it can't
-   be read, Amazon Fresh's known list is used.
-2. **Subcategories** are read lazily: the first time a shelf in a place is
-   stocked, the department pages that place lives in are read
-   (`…_categoryNode__…` entries). Each page is read once, even when several
-   shelves need it at the same moment, and the tree is kept for a week.
-3. **Which departments a place lives in** is a short table (`DEPARTMENTS`):
-   produce → Produce, aisle 1 → Breakfast / Beverages / Pantry, and so on.
-   Departments that belong to one place entirely (Produce, Dairy, Frozen…)
-   are marked `whole`.
-4. **Matching**: each subcategory is scored against a shelf's name and
-   keywords (strong) and its side's label (weak); the best one wins.
-5. **Searching**: a shelf searches its words within its subcategory, then
-   its whole department (if `whole`), then all of the store, stopping at
-   the first that returns 4 or more products. A shelf named like a whole
-   department (Office & School) also searches that department. If the
-   words find little anywhere, the shelf shows its category's own
-   products instead (no search words).
-6. **More to explore**: subcategories no shelf searches within get their
-   own shelves in the More to explore aisle (up to 16), filled by browsing
-   the category with no search words. This grows as departments are read.
-
-If a match turns out wrong in real use, the fix is a keyword on our side or
-an entry in `DEPARTMENTS`, not a store-specific table.
+Shelves came from our own list of about 200 categories, each matched by
+name to Amazon's subcategories, with keyword searches as a fallback and a
+More to explore aisle for categories nothing matched. Mismatches (an
+Office & School shelf that found nothing) led to phase 4.
 
 ## Phase 3: full shelves (built)
 
@@ -163,3 +146,18 @@ an entry in `DEPARTMENTS`, not a store-specific table.
 5. **Checkout check**: Amazon can answer OK and still drop an item, so
    checkout reads the cart back, retries missing items once with a freshly
    looked-up Add button, and lists what's still missing.
+
+## Phase 4: the store's own aisles (built)
+
+1. **Reading the store**: its front page's browse bar lists the
+   departments, and each department page lists its subcategories. All of
+   them are read the first time the store opens ("Setting up the
+   store…"), two pages at a time, and kept for a week.
+2. **Building** (`S.buildLayout(catalog)` in `src/layout.js`): departments
+   are sorted into fresh departments and center aisles by name, shelves
+   onto fixtures by name, and runs of shelves are paired into corridors.
+   A department with no subcategories is one shelf.
+3. **Shelves** browse their category (`rh=n:<category>`, no search words).
+   "Excuse me, where's the…" matches the words of the shelf names.
+4. **The demo store** has its own made-up departments and categories in
+   the same shape, and is built the same way.

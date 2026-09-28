@@ -192,38 +192,11 @@
   //
   // Amazon Fresh sorts every product into departments (Produce, Pantry
   // Staples…) and subcategories (Fresh Fruit, Nut & Seed Butters…). Each
-  // department page has a bar listing its subcategories. We read those
-  // pages lazily (the first time a shelf in that department is needed),
-  // keep them for a week, and give each shelf of ours the subcategory that
-  // matches it best, so its search stays within the right part of the store.
+  // department page has a bar listing its subcategories. The store's aisles
+  // are built from them (layout.js), so the first visit reads every
+  // department page; the result is kept for a week.
 
   const CATEGORY_DAYS = 7;
-
-  // Where each of our places lives among Amazon's departments (matched by
-  // name). `whole`: every product in that department belongs to the place,
-  // so a shelf with no better match can still search within it.
-  const DEPARTMENTS = {
-    produce: { names: ["produce"], whole: true },
-    bakery: { names: ["bakery"], whole: true },
-    deli: { names: ["deli"], whole: true },
-    meat: { names: ["meat"], whole: true },
-    dairy: { names: ["dairy"], whole: true },
-    frozen: { names: ["frozen"], whole: true },
-    drinks: { names: ["beverage"] },
-    a1: { names: ["breakfast", "beverage", "pantry"] },
-    a2: { names: ["pantry"] },
-    a3: { names: ["pantry"] },
-    a4: { names: ["pantry"] },
-    a5: { names: ["pantry"] },
-    a6: { names: ["pantry"] },
-    a7: { names: ["snack"] },
-    a8: { names: ["snack", "pantry"] },
-    a9: { names: ["beverage"] },
-    a10: { names: ["household"] },
-    a11: { names: ["personal care", "health"] },
-    a12: { names: ["baby", "pet"] },
-    more: { names: ["office"] },
-  };
 
   // If a store's front page can't be read, Amazon Fresh's departments as of
   // September 2026 (see docs/store-plan.md).
@@ -258,65 +231,13 @@
   const parseDepartments = (html) => browseBar(html, '[class*="_aislesNode__"], [class*="_categoryNodeDesktop__"]');
   const parseSubcategories = (html, deptNode) => browseBar(html, '[class*="_categoryNode__"]').filter((c) => c.node !== deptNode);
 
-  // Words that say what a category is ("Fresh" and "&" don't).
-  const STOP = new Set(["fresh", "and", "the", "for", "foods", "food", "more", "other", "all", "your"]);
-  const words = (s) => s.toLowerCase().split(/[^a-z]+/).filter((w) => w.length > 2 && !STOP.has(w));
-  const sameWord = (a, b) => a === b || (a.length >= 4 && b.length >= 4 && (a.startsWith(b) || b.startsWith(a)));
-
-  // Where a shelf should search, narrowest first: its best-matching
-  // subcategory, then its whole department when that department belongs to
-  // it entirely (Produce, Dairy…). Empty means search the whole store.
-  // `tree` is { departments: [{ node, name, subs: [{ node, name }] }] }.
-  function categoryChain(section, place, tree) {
-    if (section.category) return [section.category];
-    const hint = place && DEPARTMENTS[place.id];
-    if (!hint || !tree) return [];
-    const depts = tree.departments.filter((d) => hint.names.some((n) => d.name.toLowerCase().includes(n)));
-    const side = place.sides.find((sd) => sd.sections.includes(section));
-    const strong = words([section.name, ...section.keywords].join(" "));
-    const weak = side ? words(side.label) : [];
-    let best = null;
-    let bestScore = 0;
-    for (const d of depts) {
-      for (const sub of d.subs || []) {
-        const score = words(sub.name).reduce((t, w) => t + (strong.some((x) => sameWord(x, w)) ? 2 : weak.some((x) => sameWord(x, w)) ? 1 : 0), 0);
-        if (score > bestScore) {
-          best = sub;
-          bestScore = score;
-        }
-      }
-    }
-    const chain = [];
-    if (best) chain.push(best);
-    // A shelf named like a whole department (Office & School) searches it too.
-    const named = depts.find((d) => words(d.name).reduce((t, w) => t + (strong.some((x) => sameWord(x, w)) ? 2 : 0), 0) >= 2);
-    if (hint.whole && depts.length) chain.push(depts[0]);
-    else if (named) chain.push(named);
-    return chain.filter((c, i) => chain.indexOf(c) === i);
-  }
-
-  const categoryFor = (section, place, tree) => categoryChain(section, place, tree)[0] || null;
-
-  // Subcategories no shelf searches within, for More to explore.
-  function unclaimed(tree, places) {
-    if (!tree) return [];
-    const claimed = new Set();
-    for (const place of places) for (const side of place.sides) for (const sec of side.sections) {
-      const cat = categoryFor(sec, place, tree);
-      if (cat) claimed.add(cat.node);
-    }
-    const out = [];
-    for (const d of tree.departments) for (const sub of d.subs || []) if (!claimed.has(sub.node)) out.push({ ...sub, department: d.name });
-    return out;
-  }
-
   function makeAdapter(store) {
     const origin = location.origin.includes("amazon.") ? location.origin : "https://www.amazon.com";
 
 
     // The store's category tree, read lazily and kept for a week:
     // { at, departments: [{ node, name, subs: null | [{ node, name }] }] }
-    const treeKey = `supermarket:categories:${store.id}`;
+    const treeKey = `supermarket:catalog:${store.id}`;
     let tree = loadTree();
 
     function loadTree() {
@@ -368,14 +289,12 @@
       return tree;
     }
 
-    // Make sure the departments a place lives in have their subcategories.
-    async function ensureTreeFor(place) {
-      const hint = place && DEPARTMENTS[place.id];
-      if (!hint) return tree;
+    // Every department with its subcategories, for building the store.
+    async function catalog() {
       await departments();
-      const needed = tree.departments.filter((d) => !d.subs && hint.names.some((n) => d.name.toLowerCase().includes(n)));
+      const needed = tree.departments.filter((d) => !d.subs);
       await Promise.all(needed.map((d) => once(d.node, () => readSubcategories(d))));
-      return tree;
+      return tree.departments;
     }
 
     async function readSubcategories(d) {
@@ -434,45 +353,17 @@
         return (await cachedResults(query)).products;
       },
 
-      // A shelf's products: its words, within its category when we know it.
-      // If a category turns out too narrow (under 4 products), widen to the
-      // next one, then the whole store, so a wrong match never empties a shelf.
+      // The store's departments and their subcategories, which the aisles
+      // are built from: [{ node, name, subs: [{ node, name }] }].
+      catalog,
+
+      // A shelf's products: everything in its category, the store's best
+      // sellers first (or a search, for a display of "everything matching").
       // Returns { products, total, next }; pass `next` back for the page after.
-      async searchShelf(section, place, cursor) {
+      searchShelf(section, place, cursor) {
         if (cursor) return cachedResults(section.query, cursor.node, cursor.page);
-        let chain = [];
-        try {
-          chain = categoryChain(section, place, await ensureTreeFor(place));
-        } catch {
-          /* no categories: plain search */
-        }
-        for (const cat of chain) {
-          const r = await cachedResults(section.query, cat.node);
-          if (r.products.length >= 4 || !section.query) return r;
-        }
-        const all = await cachedResults(section.query);
-        // The words found little anywhere: show the category itself instead
-        // (everything in it, the store's best sellers first).
-        if (all.products.length < 4 && chain.length) {
-          const browse = await cachedResults("", chain[0].node);
-          if (browse.products.length > all.products.length) return browse;
-        }
-        return all;
+        return cachedResults(section.query, section.category && section.category.node);
       },
-
-      // Categories no shelf covers, for the More to explore aisle.
-      moreSections(places) {
-        return unclaimed(tree, places).map((c) => ({
-          id: `more/${store.id}-${c.node}`,
-          name: c.name,
-          query: "",
-          keywords: [c.name.toLowerCase()],
-          bays: 1,
-          category: c,
-        }));
-      },
-
-      categoryFor: (section, place) => categoryFor(section, place, tree),
 
       // The add form carries a one-time token that expires, and carts are
       // kept between visits. If the saved form fails (or there isn't one),
@@ -519,5 +410,5 @@
   S.adapters.wholefoods = () => makeAdapter(STORES.wholefoods);
   S.adapters._parseAmazonResults = parseResults; // exposed for tests
   S.adapters._parseAmazonPage = parsePage;
-  S.adapters._amazonCategories = { parseDepartments, parseSubcategories, categoryFor, categoryChain, unclaimed };
+  S.adapters._amazonCategories = { parseDepartments, parseSubcategories };
 })();

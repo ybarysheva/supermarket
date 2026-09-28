@@ -1584,3 +1584,21 @@ button.sm-door-mat {
   display: block;
   margin: 10px auto 4px;
 }
+
+.sm-setup {
+  max-width: 420px;
+  margin: 18vh auto 0;
+  padding: 0 16px;
+  text-align: center;
+}
+.sm-setup-cart {
+  font-size: 48px;
+  animation: sm-roll 1.6s ease-in-out infinite alternate;
+}
+@keyframes sm-roll {
+  from { transform: translateX(-40px); }
+  to { transform: translateX(40px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sm-setup-cart { animation: none; }
+}

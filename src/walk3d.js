@@ -371,6 +371,8 @@
             })
           );
         }
+        // An empty run is a bare wall.
+        if (!entries.length) return { entries, depth: 0.1, height: 0 };
         return { entries, depth: Math.max(...entries.map((e) => e.fixture.depth)), height: Math.max(...entries.map((e) => e.fixture.height)) };
       };
 
@@ -398,7 +400,7 @@
           place,
           label: place ? place.label : c.label,
           number: place ? place.number : null,
-          icon: S.place(c.left[0][0]).sign || "🛒",
+          icon: (c.left[0] && S.place(c.left[0][0]).sign) || "🛒",
           cold: !!(place && place.cold),
           sub: labels.join(" · "),
         };
@@ -458,6 +460,11 @@
 
       // Fixtures along each corridor, front to back.
       const alongZ = (face, originX, theta, corridor, faceSide) => {
+        if (!face.entries.length) {
+          // A bare wall between two corridors' shelving.
+          A.block(this.scene, C.endcap, 0.1, 2.0, L, originX - (faceSide === "left" ? 0.05 : -0.05), 1.0, Z0 + L / 2, true);
+          return;
+        }
         const total = face.entries.reduce((t, e) => t + e.bays, 0);
         const unit = L / total;
         let z = Z0;
@@ -479,13 +486,13 @@
         const b = this.corridors[k + 1];
         const xa = a.x - a.w / 2;
         const xb = b.x + b.w / 2;
-        const h = Math.min(a.right.height, b.left.height, 2.05);
+        const h = Math.min(Math.max(a.right.height, b.left.height), 2.05);
         for (const z of [Z0 - 0.03, Z0 + L + 0.03]) A.block(this.scene, C.endcap, xa - xb, h, 0.06, (xa + xb) / 2, h / 2, z, true);
         A.block(this.scene, C.accent, xa - xb + 0.01, 0.12, 0.07, (xa + xb) / 2, h - 0.1, Z0 - 0.04);
       }
 
       // Back wall, left to right as you face it.
-      {
+      if (back.entries.length) {
         const total = back.entries.reduce((t, e) => t + e.bays, 0);
         const unit = width / total;
         let xx = this.xMax;
@@ -497,7 +504,7 @@
       }
 
       // Chest freezers in the wide front aisle.
-      {
+      if (plan.chests) {
         const chest = run(plan.chests.sides);
         const c = this.corridors[plan.chests.corridor];
         const unit = 1.2;
@@ -699,7 +706,8 @@
       this.scene.add(lanes);
 
       // Sliding doors behind the entrance.
-      const ex = (this.corridors[this.corridors.length - 1].x + this.corridors[this.corridors.length - 2].x) / 2;
+      const cs = this.corridors;
+      const ex = cs.length > 1 ? (cs[cs.length - 1].x + cs[cs.length - 2].x) / 2 : cs[0].x;
       this.entranceX = ex;
       const glass = new THREE.MeshLambertMaterial({ color: 0xa9d2ea, transparent: true, opacity: 0.55 });
       block(this.scene, glass, 1.2, 2.4, 0.04, ex - 0.62, 1.2, this.zMin + 0.08);
@@ -774,8 +782,8 @@
       const wanted = [];
       let busy = this.store.pendingShelves();
       for (const b of this.bays) {
-        const d = Math.hypot(b.fx - at.x, b.fz - at.z);
-        const dHere = Math.hypot(b.fx - this.pos.x, b.fz - this.pos.z);
+        const d = this.bayDistance(b, at);
+        const dHere = this.bayDistance(b, this.pos);
         if (b.state !== "empty" && dHere > UNSTOCK_RADIUS && d > UNSTOCK_RADIUS) this.unstock(b);
         else if ((b.state === "empty" || b.state === "queued") && d < STOCK_RADIUS) {
           // Shelves in front of you come first; then the nearest.
@@ -804,6 +812,16 @@
           busy++;
         } else if (b.state === "empty") this.queue(b);
       }
+    }
+
+    // How far a point is from the nearest part of a bay's front: a long bay
+    // can be right beside you while its middle is far off.
+    bayDistance(b, p) {
+      const ry = b.group.rotation.y;
+      const ax = Math.cos(ry);
+      const az = -Math.sin(ry);
+      const t = clamp((p.x - b.fx) * ax + (p.z - b.fz) * az, -b.w / 2, b.w / 2);
+      return Math.hypot(b.fx + ax * t - p.x, b.fz + az * t - p.z);
     }
 
     wantsMore(bay) {
@@ -1618,8 +1636,14 @@
         // you're looking at stands back to back with it, a few cm away.
         const ry = b.group.rotation.y;
         if ((this.pos.x - b.x) * Math.sin(ry) + (this.pos.z - b.z) * Math.cos(ry) <= 0) continue;
-        const dx = b.fx - this.pos.x;
-        const dz = b.fz - this.pos.z;
+        // The part of the bay nearest to where you're looking (a long bay
+        // runs well past what's in front of you).
+        const ax = Math.cos(ry);
+        const az = -Math.sin(ry);
+        const ahead = { x: this.pos.x + look.x * 2, z: this.pos.z + look.z * 2 };
+        const t = clamp((ahead.x - b.fx) * ax + (ahead.z - b.fz) * az, -b.w / 2, b.w / 2);
+        const dx = b.fx + ax * t - this.pos.x;
+        const dz = b.fz + az * t - this.pos.z;
         const d = Math.max(0.01, Math.hypot(dx, dz));
         if (d > 4.5) continue;
         const dot = (dx * look.x + dz * look.z) / d;
@@ -1653,7 +1677,7 @@
           const [l, r] = look.z > 0 ? ["left", "right"] : ["right", "left"];
           sides = [`◀ ${bayAt(l).section.name}`, `${bayAt(r).section.name} ▶`];
         }
-      } else if (n.zone === "back") title = "Back of the store · Dairy · Meat & Seafood · Deli · Bakery";
+      } else if (n.zone === "back") title = ["Back of the store", ...new Set(S.LAYOUT.plan.back.map(([id]) => S.place(id).label))].join(" · ");
       else if (n.zone === "front") title = "Front of the store";
       else title = "Entrance";
       const bay = this.bayInView();
