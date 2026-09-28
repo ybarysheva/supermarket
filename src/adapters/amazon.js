@@ -288,8 +288,11 @@
     }
     const chain = [];
     if (best) chain.push(best);
+    // A shelf named like a whole department (Office & School) searches it too.
+    const named = depts.find((d) => words(d.name).reduce((t, w) => t + (strong.some((x) => sameWord(x, w)) ? 2 : 0), 0) >= 2);
     if (hint.whole && depts.length) chain.push(depts[0]);
-    return chain;
+    else if (named) chain.push(named);
+    return chain.filter((c, i) => chain.indexOf(c) === i);
   }
 
   const categoryFor = (section, place, tree) => categoryChain(section, place, tree)[0] || null;
@@ -447,7 +450,14 @@
           const r = await cachedResults(section.query, cat.node);
           if (r.products.length >= 4 || !section.query) return r;
         }
-        return cachedResults(section.query);
+        const all = await cachedResults(section.query);
+        // The words found little anywhere: show the category itself instead
+        // (everything in it, the store's best sellers first).
+        if (all.products.length < 4 && chain.length) {
+          const browse = await cachedResults("", chain[0].node);
+          if (browse.products.length > all.products.length) return browse;
+        }
+        return all;
       },
 
       // Categories no shelf covers, for the More to explore aisle.

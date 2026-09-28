@@ -132,7 +132,10 @@ In `src/adapters/amazon.js`:
    keywords (strong) and its side's label (weak); the best one wins.
 5. **Searching**: a shelf searches its words within its subcategory, then
    its whole department (if `whole`), then all of the store, stopping at
-   the first that returns 4 or more products.
+   the first that returns 4 or more products. A shelf named like a whole
+   department (Office & School) also searches that department. If the
+   words find little anywhere, the shelf shows its category's own
+   products instead (no search words).
 6. **More to explore**: subcategories no shelf searches within get their
    own shelves in the More to explore aisle (up to 16), filled by browsing
    the category with no search words. This grows as departments are read.
