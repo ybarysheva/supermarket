@@ -37,8 +37,9 @@ lays a store over the grocery site:
 
 ## Try it without Amazon
 
-Open `index.html` in a browser. It's a practice store with made-up
-products, and nothing is really bought.
+Open `playground/index.html` in a browser (it's also at `/playground` on the
+website). It's a practice store with made-up products, and nothing is really
+bought.
 
 ## Install the extension (Chrome, Edge, Brave, Arc)
 
@@ -106,7 +107,8 @@ src/
   background.js      loads the store into the tab when it's opened, handles
                      the toolbar icon, fetches product photos for 3D shelves
   vendor/three.min.js  three.js r159 (MIT), bundled because extensions can't load remote code
-index.html           the demo store; open it in a browser (also the website's homepage)
+index.html           the website's homepage (placeholder for a landing page)
+playground/          the demo store; open index.html in a browser
 ```
 
 ### Adding another store (e.g. NetCost)
@@ -153,7 +155,7 @@ The tests run headless Chromium:
 
 - `test/parser.mjs`: the Amazon page parser and add-to-cart requests,
   against `test/amazon-fixture.html`.
-- `test/demo.mjs`: walks through `index.html` on desktop and phone sizes
+- `test/demo.mjs`: walks through the playground on desktop and phone sizes
   (asking, picking up, the list, checkout, emptying far shelves, idle
   drawing, falling back when 3D dies, reduced motion).
 - `test/extension.mjs`: loads the real extension and runs it against a fake
