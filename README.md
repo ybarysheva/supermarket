@@ -8,9 +8,16 @@ Online grocery sites make you type searches and scroll long lists. A real
 store lets you **walk around and look at the shelves**. Supermarket Mode
 lays a store over the grocery site:
 
+- **Walk through it in 3D, like Street View.** You start at the entrance.
+  Drag to look around, and click the green arrows on the floor (or anywhere
+  on the floor) to walk. Arrow keys / WASD work too. Scroll or pinch to
+  zoom in and read the price tags. Click a product on the shelf to pick it
+  up. The real products are put on the shelves as you walk up to them.
 - **Floor map.** Produce by the entrance, bakery and meat along the back
   wall, dairy on the right, and numbered aisles in the middle. Tap a spot to
   walk there.
+- **Flat shelf view.** If 3D is too much (or your computer is slow), tap
+  **Flat shelves** to see the same aisle as a flat wall of products.
 - **Aisles with shelves.** Each aisle has a hanging sign. Items sit on
   shelves with shelf-edge price tags that show the price and unit price.
   Scroll sideways (or press ← →) to walk along the aisle. Tap **Turn
@@ -56,12 +63,14 @@ you're a bot.
 src/
   layout.js          the store's floor plan: departments, aisles, shelf sections
   ui.js              the supermarket itself (renders in a shadow DOM)
+  walk3d.js          the 3D walk-through (three.js), built from layout.js
   store.css          how it looks
   adapters/
     amazon.js        Amazon Fresh + Whole Foods: search, add to cart, cart link
     demo.js          the pretend practice store
   content.js         adds the button on amazon.com
-  background.js      toolbar icon
+  background.js      toolbar icon; fetches product photos for the 3D shelves
+  vendor/three.min.js  three.js r159 (MIT), bundled because extensions can't load remote code
 demo.html            open this to try it offline
 ```
 

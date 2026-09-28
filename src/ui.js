@@ -23,6 +23,8 @@
     return el;
   }
 
+  S.h = h;
+
   const money = (n) => `$${n.toFixed(2)}`;
 
   // Shelf-tag style price: big dollars, small raised cents.
@@ -61,6 +63,7 @@
     constructor(opts) {
       this.opts = opts;
       this.view = "entrance";
+      this.use3d = !!(S.Walk3D && S.Walk3D.supported()) && opts.use3d !== false;
       this.place = null;
       this.side = 0;
       this.focus = null;
@@ -105,6 +108,7 @@
 
     close() {
       document.removeEventListener("keydown", this.onKey, true);
+      if (this.walker) this.walker.destroy();
       this.host.remove();
       document.documentElement.style.overflow = this.prevOverflow;
       if (this.opts.onClose) this.opts.onClose();
@@ -116,11 +120,25 @@
       this.adapter = S.adapters[id]();
       this.shelves.clear();
       this.basket = new Map(load(`supermarket:basket:${id}`, []).map((it) => [it.product.id, it]));
-      this.view = "map";
+      if (this.walker) this.walker.destroy();
+      this.walker = null;
+      // With 3D available you start at the entrance, looking into the store.
+      this.view = this.use3d ? "walk" : "map";
       this.render();
     }
 
+    // Walk to a shelf: in 3D when we can, otherwise the flat shelf view.
     goTo(place, sideIndex = 0, sectionIndex = null) {
+      if (this.use3d && place.id !== "special") {
+        this.view = "walk";
+        this.renderMain();
+        this.walker.goToSection(place, sideIndex, sectionIndex ?? 0);
+        return;
+      }
+      this.goToFlat(place, sideIndex, sectionIndex);
+    }
+
+    goToFlat(place, sideIndex = 0, sectionIndex = null) {
       this.place = place;
       this.side = sideIndex;
       this.focus = sectionIndex;
@@ -231,6 +249,7 @@
     }
 
     updateBadges() {
+      if (this.walker) this.walker.refreshBadges();
       for (const el of this.el.main.querySelectorAll("[data-pid]")) {
         const item = this.basket.get(el.getAttribute("data-pid"));
         const badge = el.querySelector(".sm-in-cart");
@@ -326,7 +345,12 @@
     renderMain() {
       const m = this.el.main;
       m.className = `sm-main view-${this.view}`;
-      if (this.view === "entrance") m.replaceChildren(this.renderEntrance());
+      if (this.view !== "walk" && this.walker) this.walker.stop();
+      if (this.view === "walk") {
+        if (!this.walker) this.walker = new S.Walk3D(this);
+        m.replaceChildren(this.walker.el);
+        this.walker.start();
+      } else if (this.view === "entrance") m.replaceChildren(this.renderEntrance());
       else if (this.view === "map") m.replaceChildren(this.renderMap());
       else m.replaceChildren(...this.renderAisle().filter(Boolean));
       if (this.view === "aisle") this.afterAisleMounted();
@@ -383,7 +407,7 @@
         h("div", { class: "sm-floor" },
           ["bakery", "meat", "produce", "dairy", "deli"].map((id) => deptTile(dept(id))),
           h("div", { class: "sm-aisles area-aisles" }, L.aisles.map(aisleTile)),
-          h("div", { class: "sm-door-mat area-door" }, h("span", {}, "🚪"), " Entrance", h("small", {}, "You are here")),
+          h(this.use3d ? "button" : "div", { class: "sm-door-mat area-door", onclick: this.use3d ? () => { this.view = "walk"; this.renderMain(); this.walker.goToEntrance(); } : null }, h("span", {}, "🚪"), " Entrance", h("small", {}, this.use3d ? "Walk in from the door" : "You are here")),
           h("button", { class: "sm-checkout-tile area-checkout", onclick: () => this.toggleCart(true) }, "🧾 Checkout lanes")
         )
       );
@@ -415,7 +439,7 @@
       const run = h("div", { class: "sm-run", tabindex: "0", "aria-label": `${side.label} shelves` },
         side.sections.map((sec, i) => this.renderBay(sec, i)),
         h("div", { class: "sm-endcap" },
-          next ? h("button", { onclick: () => this.goTo(next) }, "End of aisle", h("strong", {}, `Walk to ${next.label} →`)) : h("button", { onclick: () => this.goMap() }, "End of the store", h("strong", {}, "Back to the map"))
+          next ? h("button", { onclick: () => this.goToFlat(next) }, "End of aisle", h("strong", {}, `Walk to ${next.label} →`)) : h("button", { onclick: () => this.goMap() }, "End of the store", h("strong", {}, "Back to the map"))
         )
       );
       this.run = run;
@@ -432,12 +456,17 @@
         h("p", { class: "sm-not-here" }, `Not seeing "${this.lastAsk}"? `, h("button", { class: "sm-link", onclick: () => this.searchWholeStore(this.lastAsk) }, "Search the whole store for it"));
 
       const nav = h("nav", { class: "sm-aisle-nav" },
-        prev ? h("button", { onclick: () => this.goTo(prev) }, `← ${prev.label}`) : h("span"),
+        prev ? h("button", { onclick: () => this.goToFlat(prev) }, `← ${prev.label}`) : h("span"),
         h("button", { class: "sm-map-btn", onclick: () => this.goMap() }, "🗺️ Store map"),
-        next ? h("button", { onclick: () => this.goTo(next) }, `${next.label} →`) : h("span")
+        next ? h("button", { onclick: () => this.goToFlat(next) }, `${next.label} →`) : h("span")
       );
 
-      return [h("div", { class: "sm-aisle-head" }, sign, turn), ask, run, walk, nav];
+      const walk3d =
+        this.use3d &&
+        place.id !== "special" &&
+        h("button", { class: "sm-turn", onclick: () => this.goTo(place, this.side, this.focus ?? 0) }, "🚶 Walk here in 3D");
+
+      return [h("div", { class: "sm-aisle-head" }, sign, turn, walk3d), ask, run, walk, nav];
     }
 
     renderBay(sec, i) {
@@ -549,8 +578,8 @@
           h("ul", {},
             items.map(({ li, loc }) => {
               const where = loc.place
-                ? h("button", { class: "sm-where", onclick: () => { this.lastAsk = li.text; this.goTo(loc.place, loc.sideIndex, loc.sectionIndex); } }, `${loc.place.label} · ${loc.place.sides[loc.sideIndex].sections[loc.sectionIndex].name}`)
-                : h("button", { class: "sm-where unknown", onclick: () => this.ask(li.text) }, "Ask for it");
+                ? h("button", { class: "sm-where", onclick: () => { this.lastAsk = li.text; this.putListAwayOnPhones(); this.goTo(loc.place, loc.sideIndex, loc.sectionIndex); } }, `${loc.place.label} · ${loc.place.sides[loc.sideIndex].sections[loc.sectionIndex].name}`)
+                : h("button", { class: "sm-where unknown", onclick: () => { this.putListAwayOnPhones(); this.ask(li.text); } }, "Ask for it");
               const box = h("input", { type: "checkbox", "aria-label": `Got ${li.text}` });
               box.checked = li.done;
               box.addEventListener("change", () => { li.done = box.checked; save("supermarket:list", this.list); this.renderList(); });
@@ -564,7 +593,14 @@
       if (this.listOpen) setTimeout(() => input.focus(), 0);
     }
 
-    toggleCart(open = !this.cartOpen) {
+    // On a phone the list covers the whole store, so put it in your pocket.
+    putListAwayOnPhones() {
+      if (window.innerWidth > 760) return;
+      this.listOpen = false;
+      this.renderList();
+    }
+
+        toggleCart(open = !this.cartOpen) {
       this.cartOpen = open;
       this.renderCart();
     }
@@ -656,7 +692,12 @@
         e.stopPropagation();
         return;
       }
-      if (typing || !this.el.modal.hidden || this.view !== "aisle") return;
+      if (typing || !this.el.modal.hidden) return;
+      if (this.view === "walk") {
+        if (this.walker.onKey(e)) e.preventDefault();
+        return;
+      }
+      if (this.view !== "aisle") return;
       if (e.key === "ArrowRight") { this.walk(1); e.preventDefault(); }
       else if (e.key === "ArrowLeft") { this.walk(-1); e.preventDefault(); }
     }

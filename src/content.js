@@ -4,6 +4,13 @@
   const S = window.Supermarket;
   const STORES = ["fresh", "wholefoods"];
 
+  // Lets the 3D shelves show Amazon's product photos (see background.js).
+  S.imageProxy = async (url) => {
+    const res = await chrome.runtime.sendMessage({ type: "supermarket:image", url });
+    if (!res || !res.ok) throw new Error("image unavailable");
+    return Uint8Array.from(atob(res.base64), (c) => c.charCodeAt(0));
+  };
+
   function guessStore() {
     const u = location.href.toLowerCase();
     if (u.includes("wholefoods") || u.includes("vuzhifdob2xlie")) return "wholefoods";
