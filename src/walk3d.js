@@ -22,7 +22,7 @@
   const PX_PER_M = 700; // price tag text resolution
   const STOCK_RADIUS = 10; // stock shelves within this distance…
   const UNSTOCK_RADIUS = 24; // …and empty them again past this one, to save memory
-  const MAX_STOCKING = 2; // shelves waiting on the store at once (the adapter's limit too)
+  const MAX_STOCKING = 2; // shelf requests queued at once (the store lets two out at a time)
 
   const C = {
     floorA: "#f2f2ed",
@@ -770,12 +770,11 @@
       const here = this.move ? this.move.target : this.node;
       const lookLen = Math.hypot(look.x, look.z) || 1;
       const wanted = [];
-      let busy = 0;
+      let busy = this.store.pendingShelves();
       for (const b of this.bays) {
         const d = Math.hypot(b.fx - at.x, b.fz - at.z);
         const dHere = Math.hypot(b.fx - this.pos.x, b.fz - this.pos.z);
         if (b.state !== "empty" && dHere > UNSTOCK_RADIUS && d > UNSTOCK_RADIUS) this.unstock(b);
-        else if (b.state === "loading" && !this.isShelfReady(b)) busy++;
         else if ((b.state === "empty" || b.state === "queued") && d < STOCK_RADIUS) {
           // Shelves in front of you come first; then the nearest.
           const facing = ((b.x - at.x) * look.x + (b.z - at.z) * look.z) / (lookLen * (Math.hypot(b.x - at.x, b.z - at.z) || 1));
@@ -813,7 +812,7 @@
     }
 
     isShelfReady(bay) {
-      const s = this.store.shelves.get(bay.section.query);
+      const s = this.store.shelfState(bay.section);
       return !!s && s.status === "ready";
     }
 
@@ -823,7 +822,7 @@
       this.prepareBay(bay);
       bay.state = "loading";
       const token = (bay.token = {});
-      const s = this.store.shelf(bay.section.query);
+      const s = this.store.shelf(bay.section, bay.place);
       const done = () => {
         if (this.destroyed || bay.token !== token) return;
         this.clearPlaceholder(bay);

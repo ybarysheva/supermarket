@@ -25,6 +25,11 @@
 
   S.h = h;
 
+  // Shelf searches waiting on the store at once. Stores throttle bursts of
+  // searches (Amazon answers with a captcha), so walk the aisles politely.
+  const MAX_REQUESTS = 2;
+  const shelfKey = (section) => section.id || section.query;
+
   const money = (n) => `$${n.toFixed(2)}`;
 
   // Shelf-tag style price: big dollars, small raised cents.
@@ -69,6 +74,7 @@
       this.focus = null;
       this.lastAsk = null;
       this.shelves = new Map();
+      this.requests = { active: 0, queue: [] };
       this.basket = new Map();
       this.list = load("supermarket:list", []);
       this.listOpen = false;
@@ -209,17 +215,54 @@
 
     // ---- shelves -----------------------------------------------------------
 
-    shelf(query) {
-      let s = this.shelves.get(query);
+    // One shelf's products, fetched once per visit. Every request to the
+    // store (3D or flat view) goes through one queue that lets at most two
+    // out at a time, first come first served; the 3D view decides what
+    // joins the queue next.
+    shelf(section, place) {
+      const key = shelfKey(section);
+      let s = this.shelves.get(key);
       if (!s || s.status === "error") {
         s = { status: "loading" };
-        s.promise = this.adapter.search(query).then(
+        const ask = () => (this.adapter.searchShelf ? this.adapter.searchShelf(section, place) : this.adapter.search(section.query));
+        s.promise = this.schedule(ask).then(
           (products) => Object.assign(s, { status: "ready", products }),
           (error) => Object.assign(s, { status: "error", error })
         );
-        this.shelves.set(query, s);
+        this.shelves.set(key, s);
       }
       return s;
+    }
+
+    shelfState(section) {
+      return this.shelves.get(shelfKey(section));
+    }
+
+    // Requests waiting on the store or queued to go.
+    pendingShelves() {
+      return this.requests.active + this.requests.queue.length;
+    }
+
+    schedule(fn) {
+      return new Promise((resolve, reject) => {
+        this.requests.queue.push(() =>
+          Promise.resolve()
+            .then(fn)
+            .then(resolve, reject)
+            .finally(() => {
+              this.requests.active--;
+              this.pumpRequests();
+            })
+        );
+        this.pumpRequests();
+      });
+    }
+
+    pumpRequests() {
+      while (this.requests.active < MAX_REQUESTS && this.requests.queue.length) {
+        this.requests.active++;
+        this.requests.queue.shift()();
+      }
     }
 
     // ---- basket ------------------------------------------------------------
@@ -557,7 +600,7 @@
     stockBay(container, sec) {
       if (container.dataset.stocked) return;
       container.dataset.stocked = "1";
-      const s = this.shelf(sec.query);
+      const s = this.shelf(sec, this.place);
       const draw = () => {
         if (s.status === "ready") container.replaceChildren(...this.renderShelves(s.products));
         else if (s.status === "error") {
