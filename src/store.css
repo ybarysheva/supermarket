@@ -265,29 +265,51 @@
   color: var(--ink-soft);
 }
 
+/* The floor plan: back wall on top, aisles in the middle, the front
+   (checkouts and entrance) at the bottom, as if looking down from above. */
 .sm-floor {
-  display: grid;
-  gap: 12px;
-  grid-template-columns: minmax(150px, 1fr) 2fr 2fr minmax(150px, 1fr);
-  grid-template-areas:
-    "bakery  bakery  meat    meat"
-    "produce aisles  aisles  dairy"
-    "produce aisles  aisles  deli"
-    "door    checkout checkout checkout";
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
   background: var(--wall);
   border: 3px solid #b8beb5;
   border-radius: 6px;
-  padding: 14px;
+  padding: 12px;
 }
 
-.area-bakery { grid-area: bakery; }
-.area-meat { grid-area: meat; }
-.area-produce { grid-area: produce; }
-.area-dairy { grid-area: dairy; }
-.area-deli { grid-area: deli; }
-.area-aisles { grid-area: aisles; }
-.area-door { grid-area: door; }
-.area-checkout { grid-area: checkout; }
+.sm-back-row,
+.sm-front-row {
+  display: flex;
+  gap: 10px;
+}
+
+.sm-back-row > *,
+.sm-front-row > * {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.sm-middle {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.sm-wall-col {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1.2 0 96px;
+}
+
+.sm-wall-col > * {
+  flex: 1 1 auto;
+}
+
+.sm-wall-col.wide {
+  flex: 1.6 0 120px;
+}
 
 .sm-dept,
 .sm-aisle-tile,
@@ -314,15 +336,16 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 14px;
-  min-height: 96px;
+  padding: 10px 12px;
+  min-height: 84px;
 }
 
-.area-produce { background: #eef7e8; }
-.area-bakery { background: #fbf1e3; }
-.area-meat { background: #fbeceb; }
-.area-dairy { background: #eaf2fb; }
-.area-deli { background: #f5eefa; }
+.zone-produce { background: #eef7e8; }
+.zone-bakery { background: #fbf1e3; }
+.zone-meat { background: #fbeceb; }
+.zone-dairy,
+.zone-drinks { background: #eaf2fb; }
+.zone-deli { background: #f5eefa; }
 
 .sm-dept-icon {
   font-size: 30px;
@@ -338,13 +361,8 @@
   color: var(--ink-soft);
 }
 
-.sm-aisles {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
-  gap: 10px;
-}
-
 .sm-aisle-tile {
+  flex: 1 0 52px;
   display: flex;
   flex-direction: column;
   align-items: stretch;
@@ -358,7 +376,7 @@
   background: var(--sign);
   color: #fff;
   font-weight: 900;
-  font-size: 26px;
+  font-size: 22px;
   text-align: center;
   padding: 6px 0;
 }
@@ -371,8 +389,8 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 10px 6px;
-  font-size: 12.5px;
+  padding: 8px 4px;
+  font-size: 11.5px;
   hyphens: auto;
   font-weight: 700;
 }
@@ -1484,20 +1502,15 @@ button.sm-door-mat {
     flex-basis: 100%;
     max-width: none;
   }
-  .sm-floor {
-    grid-template-columns: 1fr 1fr;
-    grid-template-areas:
-      "bakery  meat"
-      "produce dairy"
-      "aisles  aisles"
-      "deli    deli"
-      "door    checkout";
+  .sm-back-row {
+    flex-wrap: wrap;
   }
-  .sm-aisles {
-    grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+  .sm-back-row > * {
+    flex-basis: calc(50% - 5px);
   }
   .sm-aisle-tile {
-    min-height: 170px;
+    min-height: 200px;
+    flex-basis: 70px;
   }
   .sm-item {
     width: 124px;

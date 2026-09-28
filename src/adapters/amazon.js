@@ -30,7 +30,7 @@
   };
 
   const CACHE_MINUTES = 30;
-  const MAX_PER_SECTION = 18;
+  const MAX_PER_SECTION = 60; // a whole results page
 
   function cacheGet(key) {
     try {
