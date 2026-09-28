@@ -1,9 +1,9 @@
-// Walks through the demo store (demo.html) the way a person would: 3D and
+// Walks through the demo store (index.html) the way a person would: 3D and
 // flat views, asking for things, the list, the cart and checkout, plus the
 // memory and fallback behavior phones rely on.
 import { launch, root, checker, until, store } from "./helpers.mjs";
 
-const url = "file://" + root + "demo.html";
+const url = "file://" + root + "index.html";
 const browser = await launch();
 const t = checker("Demo store");
 
