@@ -14,6 +14,7 @@ const STORE_FILES = [
   "src/adapters/amazon.js",
   "src/ui.js",
   "src/walk3d.js",
+  "src/fixtures.js",
 ];
 
 async function loadStore(tabId, frameId = 0) {

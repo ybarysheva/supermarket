@@ -4,12 +4,14 @@ import { readFileSync } from "node:fs";
 import { launch, root, checker } from "./helpers.mjs";
 
 const fixture = readFileSync(root + "test/amazon-fixture.html", "utf8");
+// Product cards from a real Amazon Fresh search page (scrubbed).
+const real = readFileSync(root + "test/amazon-fresh-search.html", "utf8");
 const browser = await launch();
 const page = await browser.newPage();
 await page.goto("file://" + root + "playground/index.html");
 await page.addScriptTag({ path: root + "src/adapters/amazon.js" });
 
-const result = await page.evaluate(async (html) => {
+const result = await page.evaluate(async ({ html, realHtml }) => {
   const S = window.Supermarket;
   const products = S.adapters._parseAmazonResults(html, "https://www.amazon.com");
 
@@ -55,8 +57,10 @@ const result = await page.evaluate(async (html) => {
     "https://www.amazon.com"
   )[0];
 
-  return { products, captcha, sent, added, noForm, cartUrl: fresh.cartUrl(), retried, refreshed, signedOut, evil };
-}, fixture);
+  const realProducts = S.adapters._parseAmazonResults(realHtml, "https://www.amazon.com");
+
+  return { products, captcha, sent, added, noForm, cartUrl: fresh.cartUrl(), retried, refreshed, signedOut, evil, realProducts };
+}, { html: fixture, realHtml: real });
 await browser.close();
 
 const checks = [
@@ -77,6 +81,14 @@ const checks = [
   ["says so when you're signed out", /signed out/.test(result.signedOut || "")],
   ["drops javascript: links", result.evil.url === "https://www.amazon.com/dp/B0EVIL" && result.evil.image === null],
 ];
+const rp = result.realProducts;
+checks.push(
+  ["real page: finds the products", rp.length >= 6],
+  ["real page: every product has a name, price and photo", rp.every((p) => p.name && p.price > 0 && p.image)],
+  ["real page: reads unit prices like $0.69/ounce", rp.filter((p) => /^\$[\d.]+\/[a-z]/i.test(p.unitPrice)).length >= rp.length / 2],
+  ["real page: finds Fresh add-to-cart forms", rp.filter((p) => p.addForm && /\/cart\/add-to-cart\/local-market\//.test(p.addForm.action)).length >= rp.length / 2],
+  ["real page: forms carry the token, product and quantity", rp.filter((p) => p.addForm).every((p) => ["anti-csrftoken-a2z", "items[0.base][asin]", "items[0.base][quantity]"].every((n) => p.addForm.fields.some(([f]) => f === n)))]
+);
 const t = checker("Amazon parser");
 for (const [name, ok] of checks) t.check(name, ok);
 t.done();

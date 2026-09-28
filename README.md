@@ -13,9 +13,13 @@ lays a store over the grocery site:
   on the floor) to walk. Arrow keys / WASD work too. Scroll or pinch to
   zoom in and read the price tags. Click a product on the shelf to pick it
   up. The real products are put on the shelves as you walk up to them.
-- **Floor map.** Produce by the entrance, bakery and meat along the back
-  wall, dairy on the right, and numbered aisles in the middle. Tap a spot to
-  walk there.
+- **A full-size store.** Produce by the entrance, bakery, deli, meat &
+  seafood and dairy around the walls, 12 numbered aisles plus frozen and
+  "More to explore" in the middle, about 200 categories in all. Each
+  department uses the display it would in a real store: produce tables and
+  misted racks, open coolers, glass-door freezers, service counters, bread
+  racks, chest freezers. See [docs/store-plan.md](docs/store-plan.md).
+- **Floor map.** The whole store from above. Tap a spot to walk there.
 - **Flat shelf view.** If 3D is too much (or your computer is slow), tap
   **Flat shelves** to see the same aisle as a flat wall of products.
 - **Aisles with shelves.** Each aisle has a hanging sign. Items sit on
@@ -98,7 +102,8 @@ you're a bot.
 
 ```
 src/
-  layout.js          the store's floor plan: departments, aisles, shelf sections
+  layout.js          our categories and the floor plan: departments, aisles, sections
+  fixtures.js        what each display looks like and where products sit on it
   ui.js              the supermarket itself (renders in a shadow DOM)
   walk3d.js          the 3D walk-through (three.js), built from layout.js
   store.css          how it looks
@@ -156,7 +161,8 @@ npm test
 The tests run headless Chromium:
 
 - `test/parser.mjs`: the Amazon page parser and add-to-cart requests,
-  against `test/amazon-fixture.html`.
+  against `test/amazon-fixture.html` and product cards from a real Amazon
+  Fresh search (`test/amazon-fresh-search.html`, scrubbed).
 - `test/demo.mjs`: walks through the playground on desktop and phone sizes
   (asking, picking up, the list, checkout, emptying far shelves, idle
   drawing, falling back when 3D dies, reduced motion).

@@ -25,6 +25,11 @@
 
   S.h = h;
 
+  // Shelf searches waiting on the store at once. Stores throttle bursts of
+  // searches (Amazon answers with a captcha), so walk the aisles politely.
+  const MAX_REQUESTS = 2;
+  const shelfKey = (section) => section.id || section.query;
+
   const money = (n) => `$${n.toFixed(2)}`;
 
   // Shelf-tag style price: big dollars, small raised cents.
@@ -69,6 +74,7 @@
       this.focus = null;
       this.lastAsk = null;
       this.shelves = new Map();
+      this.requests = { active: 0, queue: [] };
       this.basket = new Map();
       this.list = load("supermarket:list", []);
       this.listOpen = false;
@@ -209,17 +215,54 @@
 
     // ---- shelves -----------------------------------------------------------
 
-    shelf(query) {
-      let s = this.shelves.get(query);
+    // One shelf's products, fetched once per visit. Every request to the
+    // store (3D or flat view) goes through one queue that lets at most two
+    // out at a time, first come first served; the 3D view decides what
+    // joins the queue next.
+    shelf(section, place) {
+      const key = shelfKey(section);
+      let s = this.shelves.get(key);
       if (!s || s.status === "error") {
         s = { status: "loading" };
-        s.promise = this.adapter.search(query).then(
+        const ask = () => (this.adapter.searchShelf ? this.adapter.searchShelf(section, place) : this.adapter.search(section.query));
+        s.promise = this.schedule(ask).then(
           (products) => Object.assign(s, { status: "ready", products }),
           (error) => Object.assign(s, { status: "error", error })
         );
-        this.shelves.set(query, s);
+        this.shelves.set(key, s);
       }
       return s;
+    }
+
+    shelfState(section) {
+      return this.shelves.get(shelfKey(section));
+    }
+
+    // Requests waiting on the store or queued to go.
+    pendingShelves() {
+      return this.requests.active + this.requests.queue.length;
+    }
+
+    schedule(fn) {
+      return new Promise((resolve, reject) => {
+        this.requests.queue.push(() =>
+          Promise.resolve()
+            .then(fn)
+            .then(resolve, reject)
+            .finally(() => {
+              this.requests.active--;
+              this.pumpRequests();
+            })
+        );
+        this.pumpRequests();
+      });
+    }
+
+    pumpRequests() {
+      while (this.requests.active < MAX_REQUESTS && this.requests.queue.length) {
+        this.requests.active++;
+        this.requests.queue.shift()();
+      }
     }
 
     // ---- basket ------------------------------------------------------------
@@ -444,8 +487,8 @@
     }
 
     renderMap() {
-      const L = S.LAYOUT;
-      const dept = (id) => L.departments.find((d) => d.id === id);
+      const plan = S.LAYOUT.plan;
+      const P = S.place;
 
       // How many unticked list items live in each place — shown as a pin.
       const pins = new Map();
@@ -456,28 +499,38 @@
       }
       const pin = (place) => pins.get(place) && h("span", { class: "sm-pin", title: "Things from your list" }, `📝 ${pins.get(place)}`);
 
-      const deptTile = (d) =>
-        h("button", { class: `sm-dept area-${d.id}`, onclick: () => this.goTo(d) },
-          h("span", { class: "sm-dept-icon" }, d.sign),
-          h("span", { class: "sm-dept-name" }, d.label),
-          h("span", { class: "sm-dept-sub" }, d.sides[0].sections.map((s) => s.name).slice(0, 4).join(" · ")),
-          pin(d)
+      const deptTile = (place, sideIndex = 0) =>
+        h("button", { class: `sm-dept zone-${place.zone}`, onclick: () => this.goTo(place, sideIndex) },
+          h("span", { class: "sm-dept-icon" }, place.sign || place.number),
+          h("span", { class: "sm-dept-name" }, place.label),
+          h("span", { class: "sm-dept-sub" }, place.sides[sideIndex].sections.map((s) => s.name).slice(0, 3).join(" · ")),
+          pin(place)
         );
 
-      const aisleTile = (a) =>
-        h("button", { class: `sm-aisle-tile${a.cold ? " cold" : ""}`, onclick: () => this.goTo(a) },
-          h("span", { class: "sm-aisle-num" }, a.label.replace("Aisle ", "")),
-          h("span", { class: "sm-aisle-contents" }, a.sides.map((s) => h("span", {}, s.label))),
-          pin(a)
+      const aisleTile = (place) =>
+        h("button", { class: `sm-aisle-tile${place.cold ? " cold" : ""}`, onclick: () => this.goTo(place), title: place.label },
+          h("span", { class: "sm-aisle-num" }, place.number),
+          h("span", { class: "sm-aisle-contents" }, place.sides.map((s) => h("span", {}, s.label))),
+          pin(place)
         );
+
+      // Back wall, left to right; one tile per department.
+      const back = [];
+      for (const [id] of plan.back) if (back[back.length - 1] !== P(id)) back.push(P(id));
 
       return h("div", { class: "sm-map" },
         h("p", { class: "sm-map-hint" }, "Tap a department or aisle to walk over. Ask at the top if you can't find something."),
         h("div", { class: "sm-floor" },
-          ["bakery", "meat", "produce", "dairy", "deli"].map((id) => deptTile(dept(id))),
-          h("div", { class: "sm-aisles area-aisles" }, L.aisles.map(aisleTile)),
-          h(this.use3d ? "button" : "div", { class: "sm-door-mat area-door", onclick: this.use3d ? () => { this.view = "walk"; this.renderMain(); this.walker?.goToEntrance(); } : null }, h("span", {}, "🚪"), " Entrance", h("small", {}, this.use3d ? "Walk in from the door" : "You are here")),
-          h("button", { class: "sm-checkout-tile area-checkout", onclick: () => this.toggleCart(true) }, "🧾 Checkout lanes")
+          h("div", { class: "sm-back-row" }, back.map((p) => deptTile(p))),
+          h("div", { class: "sm-middle" },
+            h("div", { class: "sm-wall-col" }, deptTile(P("dairy"), 1), deptTile(P("drinks"))),
+            plan.corridors.filter((c) => c.place).map((c) => aisleTile(P(c.place))),
+            h("div", { class: "sm-wall-col wide" }, deptTile(P("bakery")), deptTile(P("produce")))
+          ),
+          h("div", { class: "sm-front-row" },
+            h("button", { class: "sm-checkout-tile", onclick: () => this.toggleCart(true) }, "🧾 Checkout lanes"),
+            h(this.use3d ? "button" : "div", { class: "sm-door-mat", onclick: this.use3d ? () => { this.view = "walk"; this.renderMain(); this.walker?.goToEntrance(); } : null }, h("span", {}, "🚪"), " Entrance", h("small", {}, this.use3d ? "Walk in from the door" : "You are here"))
+          )
         )
       );
     }
@@ -489,10 +542,9 @@
       const idx = places.indexOf(place);
       const prev = idx > 0 ? places[idx - 1] : null;
       const next = idx >= 0 && idx < places.length - 1 ? places[idx + 1] : null;
-      const isAisle = /^Aisle/.test(place.label);
 
       const sign = h("div", { class: `sm-hanging-sign${place.cold ? " cold" : ""}` },
-        h("div", { class: "sm-hanging-num" }, isAisle ? place.label.replace("Aisle ", "") : place.sign),
+        h("div", { class: "sm-hanging-num" }, place.number || place.sign),
         h("div", { class: "sm-hanging-body" },
           h("div", { class: "sm-hanging-title" }, place.label),
           h("div", { class: "sm-hanging-list" }, place.sides.map((s, i) => h("span", { class: i === this.side ? "here" : "" }, s.label)))
@@ -548,7 +600,7 @@
     stockBay(container, sec) {
       if (container.dataset.stocked) return;
       container.dataset.stocked = "1";
-      const s = this.shelf(sec.query);
+      const s = this.shelf(sec, this.place);
       const draw = () => {
         if (s.status === "ready") container.replaceChildren(...this.renderShelves(s.products));
         else if (s.status === "error") {

@@ -104,13 +104,53 @@
 
   const UNITS = ["oz", "lb", "ct", "fl oz"];
 
+  // A picture for shelves the catalog above doesn't cover.
+  const EMOJI = [
+    ["spinach|kale|greens|lettuce|romaine", "🥬"], ["herbs|cilantro|parsley", "🌿"], ["cucumber|zucchini|squash", "🥒"],
+    ["beets|radish|root", "🥕"], ["nuts|seeds|almond", "🥜"], ["cut fruit", "🍉"], ["tortilla", "🌯"], ["muffin|croissant", "🥐"],
+    ["cookies|brownies", "🍪"], ["deli|turkey|ham", "🥪"], ["cheese", "🧀"], ["chicken", "🍗"], ["beef|steak", "🥩"], ["pork", "🥓"],
+    ["sausage|hot dog", "🌭"], ["salmon", "🐟"], ["milk|cream", "🥛"], ["eggs", "🥚"], ["butter", "🧈"], ["yogurt", "🥣"],
+    ["juice", "🧃"], ["water|seltzer", "💧"], ["soda", "🥤"], ["energy|sports", "⚡"], ["coffee", "☕"], ["tea", "🍵"],
+    ["cereal|oatmeal|granola", "🥣"], ["pancake|waffle|syrup|honey", "🥞"], ["peanut butter|jam", "🥜"], ["flour", "🌾"],
+    ["chocolate", "🍫"], ["spices|salt|pepper", "🧂"], ["soup|broth", "🍲"], ["tomato", "🍅"], ["beans|lentils", "🫘"],
+    ["tuna|sardine", "🐟"], ["pasta|spaghetti", "🍝"], ["rice", "🍚"], ["soy|teriyaki|asian", "🥢"], ["ketchup|mustard|bbq|hot sauce", "🌶️"],
+    ["pickles", "🥒"], ["dressing", "🥗"], ["chips", "🥔"], ["pretzels|popcorn", "🥨"], ["bars", "🍫"], ["candy", "🍬"],
+    ["crackers", "🍘"], ["paper towels|toilet paper", "🧻"], ["laundry|dish soap|cleaner|wipes", "🧽"], ["trash|foil|zip", "🗑️"],
+    ["toothpaste|toothbrush", "🪥"], ["soap|body wash", "🧼"], ["diapers|baby", "🍼"], ["dog", "🐕"], ["pizza", "🍕"],
+    ["vegetables|peas", "🫛"], ["waffles|breakfast", "🧇"], ["ice cream", "🍨"], ["bread|bagel", "🍞"],
+    ["citrus|orange|lemon|lime", "🍊"], ["grape|melon", "🍉"], ["peach|plum|cherr", "🍑"], ["mango|pineapple|kiwi|tropical", "🥭"],
+    ["potato", "🥔"], ["onion|garlic|shallot", "🧅"], ["corn", "🌽"], ["celery|leek", "🥬"], ["tofu|tempeh", "🧈"],
+    ["smoothie|pressed", "🧃"], ["salad", "🥗"], ["bun|roll", "🍔"], ["pita|naan|flatbread", "🫓"], ["cake|pie", "🍰"],
+    ["donut|doughnut", "🍩"], ["olive|antipasti", "🫒"], ["sushi", "🍣"], ["sandwich|wrap", "🥪"], ["lamb|turkey|duck", "🍖"],
+    ["shrimp|scallop|mussel|crab|shellfish", "🦐"], ["smoked|herring|lox|cod|tilapia|fish", "🐟"], ["bacon", "🥓"],
+    ["ground", "🥩"], ["instant coffee|cocoa|creamer", "☕"], ["sugar|sweetener", "🍬"], ["cake mix|brownie", "🧁"],
+    ["frosting|sprinkles", "🎂"], ["evaporated|condensed", "🥫"], ["marinade|rub|gravy|seasoning", "🧂"], ["ramen|noodle|udon", "🍜"],
+    ["macaroni|mac", "🧀"], ["chili", "🌶️"], ["fruit|applesauce", "🍑"], ["alfredo|pesto", "🍝"], ["parmesan|breadcrumbs", "🧀"],
+    ["quinoa|couscous|grains", "🌾"], ["stuffing|mashed", "🥔"], ["curry|coconut", "🥥"], ["taco|enchilada|salsa|goya|latin", "🌮"],
+    ["indian", "🍛"], ["mediterranean|tahini", "🧆"], ["russian|polish|european|kosher", "🥟"], ["mayonnaise|mayo", "🥚"],
+    ["vinegar|oil|cooking spray", "🫒"], ["croutons|toppings", "🥗"], ["cheese puffs|puffs", "🧀"], ["rice cakes|veggie chips", "🍘"],
+    ["jerky|meat sticks", "🥩"], ["graham|wafers", "🍪"], ["gum|mints", "🍬"], ["iced tea|lemonade", "🍋"], ["drink mix", "🥤"],
+    ["tissues|napkins", "🧻"], ["plates|cups|disposable", "🍽️"], ["batteries|sponges|bulbs", "🔋"], ["hair|shampoo", "🧴"],
+    ["deodorant|lotion|razor", "🧴"], ["vitamin|supplement", "💊"], ["pain|cold medicine", "💊"], ["bandage|first aid", "🩹"],
+    ["feminine|cotton", "🧼"], ["formula|toddler", "🍼"], ["litter|cat", "🐈"], ["gluten|organic|keto|vegan|plant based", "🌱"],
+    ["office|school", "✏️"], ["party", "🎉"], ["kitchen", "🍳"], ["flowers|bouquet", "💐"], ["dinners|meals", "🍱"],
+    ["appetizers", "🥟"], ["potatoes|fries", "🍟"], ["dough|pastry", "🥐"], ["sorbet|frozen yogurt", "🍧"], ["ice", "🧊"],
+    ["popsicle|ice pops", "🍭"], ["cones|bars", "🍦"], ["kefir|cottage", "🥛"], ["biscuits", "🥐"], ["kombucha|cold brew|chilled", "🧋"],
+  ];
+
+  const VARIANTS = ["", "Organic ", "Family-size ", "Demo Farms ", "Premium ", "Value "];
+  const title = (w) => w.charAt(0).toUpperCase() + w.slice(1);
+
   function search(query) {
     const q = query.toLowerCase();
     // The longest matching keyword wins, so "frozen fruit berries" finds the
     // freezer and not the produce berries.
     const match = CATALOG.filter(([kw]) => q.includes(kw)).sort((a, b) => b[0].length - a[0].length)[0];
-    const entry = match || ["", "🛒", ...q.split(" ").slice(0, 4).map((w) => `Store-brand ${w}`)];
-    const [, emoji, ...names] = entry;
+    const emoji = match ? match[1] : (EMOJI.find(([words]) => words.split("|").some((w) => q.includes(w))) || [0, "🛒"])[1];
+    const base = match ? match.slice(2) : q.split(" ").filter((w) => w.length > 2).slice(0, 4).map(title);
+    // Enough products to fill a real-store shelf: each name in a few variants.
+    const names = [];
+    for (const v of VARIANTS) for (const n of base) if (names.length < 24) names.push(v + n);
     const products = names.map((name) => {
       const r = hash(name);
       const price = Math.round((1 + r * 11) * 100) / 100 - 0.01;

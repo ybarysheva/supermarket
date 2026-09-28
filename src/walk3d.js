@@ -8,23 +8,21 @@
   const S = (window.Supermarket = window.Supermarket || {});
   const THREE = window.THREE;
 
-  // Store dimensions, in meters.
-  const W = 2.4; // aisle width (walkway between two shelf faces)
-  const FACE_D = 0.42; // shelf depth
-  const D = FACE_D * 2 + 0.06; // a gondola: two shelf faces back to back
-  const SPACING = W + D;
-  const Z0 = 4.4; // where the aisles start, measured from the front wall
-  const L = 12; // aisle length
+  // Store dimensions, in meters. The floor plan itself is in layout.js and
+  // the fixtures (shelving, coolers, produce tables…) in fixtures.js.
+  const W = 2.4; // aisle width (walkway between two fixtures)
+  const W_WIDE = 3.0; // produce lanes are roomier
+  const SPINE = 0.06; // between two fixtures standing back to back
+  const Z0 = 8; // where the aisles start, measured from the front wall
+  const L = 18; // aisle length
   const STEP = 1.5; // distance between standing spots inside an aisle
   const EYE = 1.6;
-  const BOARDS = [1.32, 0.72, 0.12]; // shelf heights, top shelf first
-  const SHELF_H = 2.0;
-  const CEILING = 4.5;
+  const CEILING = 4.8;
   const TAG_H = 0.08;
   const PX_PER_M = 700; // price tag text resolution
   const STOCK_RADIUS = 10; // stock shelves within this distance…
   const UNSTOCK_RADIUS = 24; // …and empty them again past this one, to save memory
-  const MAX_STOCKING = 2; // shelves waiting on the store at once (the adapter's limit too)
+  const MAX_STOCKING = 2; // shelf requests queued at once (the store lets two out at a time)
 
   const C = {
     floorA: "#f2f2ed",
@@ -164,9 +162,11 @@
 
   function toCanvas(source, iw, ih) {
     const aspect = iw && ih ? ih / iw : 1;
+    // Always 256×256 (textures that repeat, like produce piles, need a
+    // power-of-two size); `aspect` restores the shape on packages.
     const c = document.createElement("canvas");
     c.width = 256;
-    c.height = clamp(Math.round(256 * aspect), 32, 512);
+    c.height = 256;
     const g = c.getContext("2d");
     g.fillStyle = "#fff";
     g.fillRect(0, 0, c.width, c.height);
@@ -205,6 +205,7 @@
           const t = new THREE.CanvasTexture(canvas);
           t.colorSpace = THREE.SRGBColorSpace;
           t.anisotropy = 4;
+          t.wrapS = t.wrapT = THREE.RepeatWrapping; // produce piles tile it
           return { texture: t, aspect };
         }),
       };
@@ -232,7 +233,7 @@
   // Frees everything under an object that the GPU holds on to.
   function disposeTree(root, keep) {
     root.traverse((o) => {
-      if (o.geometry && o.geometry !== keep) o.geometry.dispose();
+      if (o.geometry && o.geometry !== keep && !o.geometry.userData.shared) o.geometry.dispose();
       const mats = Array.isArray(o.material) ? o.material : o.material ? [o.material] : [];
       for (const m of mats) {
         if (m.userData.shared) continue;
@@ -344,43 +345,72 @@
     // ---- building the store ------------------------------------------------
 
     build() {
-      const Lay = S.LAYOUT;
-      const dept = (id) => Lay.departments.find((d) => d.id === id);
-      const face = (place, sideIndex, from = 0, to) => ({
-        place,
-        sideIndex,
-        offset: from,
-        sections: place.sides[sideIndex].sections.slice(from, to),
+      const plan = S.LAYOUT.plan;
+      const FX = S.FIXTURES;
+      this.setupApi();
+
+      // A run of fixtures: the sections of the listed [place, side]s, in order.
+      const run = (list) => {
+        const entries = [];
+        for (const [pid, si] of list) {
+          const place = S.place(pid);
+          const side = place.sides[si];
+          side.sections.forEach((section, sectionIndex) =>
+            entries.push({
+              place,
+              sideIndex: si,
+              sectionIndex,
+              section,
+              fixtureName: side.fixture,
+              fixture: FX[side.fixture],
+              bays: section.bays || 1,
+              cold: !!(place.cold || FX[side.fixture].cold),
+              ice: /seafood/i.test(side.label),
+            })
+          );
+        }
+        return { entries, depth: Math.max(...entries.map((e) => e.fixture.depth)), height: Math.max(...entries.map((e) => e.fixture.height)) };
+      };
+
+      // Corridors run from the left wall (x = 0) toward the right (−x).
+      // Walking into the store you face +z, so your left is +x.
+      let x = 0;
+      this.corridors = plan.corridors.map((c, k) => {
+        const left = run(c.left);
+        const right = run(c.right);
+        const w = c.wide ? W_WIDE : W;
+        const leftBack = x;
+        const cx = leftBack - left.depth - w / 2;
+        const rightBack = cx - w / 2 - right.depth;
+        x = rightBack - SPINE;
+        const place = c.place ? S.place(c.place) : null;
+        const labels = [...new Set([...c.left, ...c.right].map(([pid, si]) => S.place(pid).sides[si].label))];
+        return {
+          k,
+          x: cx,
+          w,
+          left,
+          right,
+          leftBack,
+          rightBack,
+          place,
+          label: place ? place.label : c.label,
+          number: place ? place.number : null,
+          icon: S.place(c.left[0][0]).sign || "🛒",
+          cold: !!(place && place.cold),
+          sub: labels.join(" · "),
+        };
       });
-
-      // Walking into the store you face +z, so your left is +x. Corridors
-      // run left to right: produce, aisles 1–7, then deli & dairy.
-      const produce = dept("produce");
-      const corridors = [{ label: "Produce", sub: "Fruit · Vegetables", icon: produce.sign, left: face(produce, 0), right: face(produce, 1), style: "wood" }];
-      for (const a of Lay.aisles) {
-        const two = a.sides.length > 1;
-        const half = Math.ceil(a.sides[0].sections.length / 2);
-        corridors.push({
-          label: a.label,
-          number: a.label.replace("Aisle ", ""),
-          sub: a.sides.map((s) => s.label).join(" · "),
-          cold: a.cold,
-          left: two ? face(a, 0) : face(a, 0, 0, half),
-          right: two ? face(a, 1) : face(a, 0, half),
-        });
-      }
-      const deli = dept("deli");
-      const dairy = dept("dairy");
-      corridors.push({ label: "Deli & Dairy", sub: "Deli · Dairy & Eggs", icon: dairy.sign, left: face(deli, 0), right: face(dairy, 0), coldRight: true });
-      this.corridors = corridors;
-
-      const N = corridors.length;
-      const xk = (k) => -k * SPACING;
-      this.xMax = W / 2 + FACE_D + 0.05;
-      this.xMin = xk(N - 1) - W / 2 - FACE_D - 0.05;
+      const lastC = this.corridors[this.corridors.length - 1];
+      this.xMax = 0.05;
+      this.xMin = lastC.rightBack - 0.05;
       this.cx = (this.xMax + this.xMin) / 2;
-      this.zMin = -1.8;
-      this.zMax = Z0 + L + 3.0 + FACE_D + 0.05;
+      this.frontLane = Z0 - 1.5;
+      this.backLane = Z0 + L + 1.6;
+      const back = run(plan.back);
+      this.zBackWall = this.backLane + 1.3 + back.depth;
+      this.zMin = -0.05;
+      this.zMax = this.zBackWall + 0.05;
       const width = this.xMax - this.xMin;
       const depth = this.zMax - this.zMin;
       const zMid = (this.zMax + this.zMin) / 2;
@@ -409,105 +439,156 @@
       this.floor.userData.floor = true;
       this.scene.add(this.floor);
 
-      // Ceiling with long light panels over every aisle.
-      block(this.scene, C.ceiling, width, 0.05, depth, this.cx, CEILING, zMid);
-      const lightMat = new THREE.MeshBasicMaterial({ color: C.light });
-      for (let k = 0; k < N; k++) {
-        for (let z = Z0 - 2; z < Z0 + L + 2; z += 3) block(this.scene, lightMat, 0.35, 0.03, 2.2, xk(k), CEILING - 0.04, z + 1.1);
+      // Ceiling, light panels over the aisles and lanes, walls.
+      const A = this.api;
+      A.block(this.scene, C.ceiling, width, 0.05, depth, this.cx, CEILING, zMid);
+      for (const c of this.corridors) {
+        for (let z = Z0; z < Z0 + L; z += 3) A.block(this.scene, 0xffffff, 0.35, 0.03, 2.2, c.x, CEILING - 0.04, z + 1.5, false, true);
       }
+      for (let xx = this.xMax - 3; xx > this.xMin + 1; xx -= 4) {
+        A.block(this.scene, 0xffffff, 2.2, 0.03, 0.35, xx, CEILING - 0.04, this.frontLane, false, true);
+        A.block(this.scene, 0xffffff, 2.2, 0.03, 0.35, xx, CEILING - 0.04, this.backLane, false, true);
+      }
+      A.block(this.scene, C.wall, 0.1, CEILING, depth, this.xMax + 0.05, CEILING / 2, zMid, true);
+      A.block(this.scene, C.wall, 0.1, CEILING, depth, this.xMin - 0.05, CEILING / 2, zMid, true);
+      A.block(this.scene, C.wall, width, CEILING, 0.1, this.cx, CEILING / 2, this.zMax + 0.05, true);
+      A.block(this.scene, C.wall, width, CEILING, 0.1, this.cx, CEILING / 2, this.zMin - 0.05, true);
 
-      // Walls.
-      const wallH = CEILING;
-      block(this.scene, C.wall, 0.1, wallH, depth, this.xMax + 0.05, wallH / 2, zMid, this.solids);
-      block(this.scene, C.wall, 0.1, wallH, depth, this.xMin - 0.05, wallH / 2, zMid, this.solids);
-      block(this.scene, C.wall, width, wallH, 0.1, this.cx, wallH / 2, this.zMax + 0.05, this.solids);
-      block(this.scene, C.wall, width, wallH, 0.1, this.cx, wallH / 2, this.zMin - 0.05, this.solids);
-
-      // Big department signs on the walls.
-      const wallSign = (text, x, z, rotY, w = 5, color = C.sign) => {
-        const m = plane(signTexture([text], color, 1024, 180), w, w * 0.176);
-        m.position.set(x, 3.3, z);
-        m.rotation.y = rotY;
-        this.scene.add(m);
+      // Fixtures along each corridor, front to back.
+      const alongZ = (face, originX, theta, corridor, faceSide) => {
+        const total = face.entries.reduce((t, e) => t + e.bays, 0);
+        const unit = L / total;
+        let z = Z0;
+        for (const e of face.entries) {
+          const w = e.bays * unit;
+          this.buildBay(e, originX, z + w / 2, theta, w, unit, corridor, faceSide);
+          z += w;
+        }
       };
-      wallSign("PRODUCE", this.xMax - 0.01, Z0 + L / 2, -Math.PI / 2);
-      wallSign("DAIRY & EGGS", this.xMin + 0.01, Z0 + L / 2, Math.PI / 2, 5, C.cold);
-      wallSign("BAKERY", this.cx + 5, this.zMax - 0.01, Math.PI);
-      wallSign("MEAT & SEAFOOD", this.cx - 5, this.zMax - 0.01, Math.PI);
-
-      // Shelves along each corridor.
-      corridors.forEach((c, k) => {
-        const x = xk(k);
-        this.buildFace(c.left, k, x + W / 2 + FACE_D, -Math.PI / 2, c.style, c.cold);
-        this.buildFace(c.right, k, x - W / 2 - FACE_D, Math.PI / 2, c.style, c.cold || c.coldRight);
-        this.hangingSign(c, x);
+      this.corridors.forEach((c, k) => {
+        alongZ(c.left, c.leftBack, -Math.PI / 2, k, "left");
+        alongZ(c.right, c.rightBack, Math.PI / 2, k, "right");
+        this.hangingSign(c);
       });
 
-      // End caps closing off the gondolas between corridors.
-      for (let k = 0; k < N - 1; k++) {
-        const gx = xk(k) - W / 2 - D / 2;
-        block(this.scene, C.endcap, D, SHELF_H, 0.05, gx, SHELF_H / 2, Z0 - 0.025, this.solids);
-        block(this.scene, C.endcap, D, SHELF_H, 0.05, gx, SHELF_H / 2, Z0 + L + 0.025, this.solids);
-        block(this.scene, C.accent, D + 0.01, 0.12, 0.06, gx, SHELF_H - 0.1, Z0 - 0.03);
+      // Ends of the runs between corridors.
+      for (let k = 0; k < this.corridors.length - 1; k++) {
+        const a = this.corridors[k];
+        const b = this.corridors[k + 1];
+        const xa = a.x - a.w / 2;
+        const xb = b.x + b.w / 2;
+        const h = Math.min(a.right.height, b.left.height, 2.05);
+        for (const z of [Z0 - 0.03, Z0 + L + 0.03]) A.block(this.scene, C.endcap, xa - xb, h, 0.06, (xa + xb) / 2, h / 2, z, true);
+        A.block(this.scene, C.accent, xa - xb + 0.01, 0.12, 0.07, (xa + xb) / 2, h - 0.1, Z0 - 0.04);
       }
 
-      // Back wall: bakery on the left, meat & seafood on the right.
-      const bakery = dept("bakery");
-      const meat = dept("meat");
-      const back = [...face(bakery, 0).sections.map((s, i) => ({ f: face(bakery, 0), i })), ...face(meat, 0).sections.map((s, i) => ({ f: face(meat, 0), i }))];
-      const bw = 20 / back.length;
-      back.forEach(({ f, i }, j) => {
-        const x = this.cx + 10 - (j + 0.5) * bw;
-        this.buildBay(f, i, x, this.zMax - 0.05, Math.PI, bw, "wood", false, null);
-      });
+      // Back wall, left to right as you face it.
+      {
+        const total = back.entries.reduce((t, e) => t + e.bays, 0);
+        const unit = width / total;
+        let xx = this.xMax;
+        for (const e of back.entries) {
+          const w = e.bays * unit;
+          this.buildBay(e, xx - w / 2, this.zBackWall, Math.PI, w, unit, null, "back");
+          xx -= w;
+        }
+      }
 
+      // Chest freezers in the wide front aisle.
+      {
+        const chest = run(plan.chests.sides);
+        const c = this.corridors[plan.chests.corridor];
+        const unit = 1.2;
+        const total = chest.entries.reduce((t, e) => t + e.bays, 0) * unit;
+        let xx = c.x + total / 2;
+        for (const e of chest.entries) {
+          const w = e.bays * unit;
+          this.buildBay(e, xx - w / 2, Z0 - 3.5, 0, w, unit, null, "chest");
+          xx -= w;
+        }
+      }
+
+      this.departmentSigns();
       this.buildFront();
+      this.finishStatics();
       this.buildNodes();
     }
 
-    buildFace(face, k, originX, theta, style, cold) {
-      const n = face.sections.length;
-      const bw = L / n;
-      face.sections.forEach((sec, i) => {
-        // Section 0 sits nearest the front of the store.
-        const z = Z0 + (i + 0.5) * bw;
-        this.buildBay(face, i, originX, z, theta, bw, style, cold, k);
-      });
+    // Structure that never changes (shelving, walls, lights) is collected
+    // here and drawn as one batch per colour, instead of thousands of
+    // separate pieces; that keeps a full-size store smooth on phones.
+    setupApi() {
+      this.statics = new Map();
+      this.glassMats = new Map();
+      this.api = {
+        block: (g, color, w, h, d, x, y, z, solid = false, glow = false) => {
+          const o = new THREE.Object3D();
+          o.scale.set(w, h, d);
+          o.position.set(x, y, z);
+          g.add(o);
+          const key = `${glow ? "glow" : color}|${solid ? 1 : 0}`;
+          let entry = this.statics.get(key);
+          if (!entry) this.statics.set(key, (entry = { color, glow, solid, parts: [] }));
+          entry.parts.push(o);
+        },
+        glass: (g, w, h, x, y, z, color, opacity, rotX = 0) => {
+          const key = `${color}|${opacity}`;
+          let mat = this.glassMats.get(key);
+          if (!mat) {
+            mat = new THREE.MeshLambertMaterial({ color, transparent: true, opacity, side: THREE.DoubleSide, depthWrite: false });
+            mat.userData.shared = true;
+            this.glassMats.set(key, mat);
+          }
+          const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
+          m.position.set(x, y, z);
+          m.rotation.x = rotX;
+          m.renderOrder = 1;
+          g.add(m);
+        },
+      };
     }
 
-    buildBay(face, i, x, z, theta, w, style, cold, corridor) {
+    finishStatics() {
+      this.scene.updateMatrixWorld(true);
+      const glow = new THREE.MeshBasicMaterial({ color: C.light });
+      glow.userData.shared = true;
+      this.glowMat = glow;
+      for (const { color, glow: isGlow, solid, parts } of this.statics.values()) {
+        const im = new THREE.InstancedMesh(unitBox, isGlow ? glow : lambert(color), parts.length);
+        parts.forEach((o, i) => {
+          im.setMatrixAt(i, o.matrixWorld);
+          o.parent.remove(o);
+        });
+        im.instanceMatrix.needsUpdate = true;
+        im.computeBoundingSphere();
+        this.scene.add(im);
+        if (solid) this.solids.push(im);
+      }
+      this.statics = null;
+    }
+
+    buildBay(e, x, z, theta, w, unit, corridor, faceSide) {
+      const f = e.fixture;
       const g = new THREE.Group();
       g.position.set(x, 0, z);
       g.rotation.y = theta;
       this.scene.add(g);
+      f.build(this.api, g, w, unit, { ice: e.ice });
 
-      const board = style === "wood" ? C.wood : C.board;
-      block(g, C.panel, w, SHELF_H, 0.04, 0, SHELF_H / 2, 0.02, this.solids);
-      block(g, C.kick, w, 0.1, FACE_D, 0, 0.05, FACE_D / 2, this.solids);
-      for (const y of BOARDS) block(g, board, w - 0.02, 0.03, FACE_D, 0, y - 0.015, FACE_D / 2, this.solids);
-      block(g, C.upright, 0.04, SHELF_H, FACE_D, -w / 2, SHELF_H / 2, FACE_D / 2, this.solids);
-      block(g, C.upright, 0.04, SHELF_H, FACE_D, w / 2, SHELF_H / 2, FACE_D / 2, this.solids);
-
-      const sec = face.sections[i];
-      const signMat = new THREE.MeshBasicMaterial({ map: signTexture([sec.name.toUpperCase()], cold ? C.cold : C.sign, 768, 128), toneMapped: false });
-      const sign = new THREE.Mesh(new THREE.PlaneGeometry(Math.min(w * 0.9, 1.8), 0.26), signMat);
-      sign.position.set(0, SHELF_H + 0.16, FACE_D * 0.4);
+      const signMat = new THREE.MeshBasicMaterial({ map: signTexture([e.section.name.toUpperCase()], e.cold ? C.cold : C.sign, 384, 64), toneMapped: false });
+      const sign = new THREE.Mesh(new THREE.PlaneGeometry(Math.min(w * 0.9, 1.8), 0.24), signMat);
+      sign.position.set(0, f.sign.y, f.sign.z);
       g.add(sign);
 
-      if (cold) {
-        // Fridge / freezer doors.
-        const glass = new THREE.MeshLambertMaterial({ color: 0xcfe8ff, transparent: true, opacity: 0.16 });
-        block(g, glass, w, SHELF_H - 0.1, 0.02, 0, SHELF_H / 2 + 0.05, FACE_D + 0.04);
-        const doors = Math.max(1, Math.round(w / 0.75));
-        for (let d = 0; d <= doors; d++) block(g, 0xb8c2c8, 0.035, SHELF_H - 0.1, 0.04, -w / 2 + (d * w) / doors, SHELF_H / 2 + 0.05, FACE_D + 0.04);
-      }
-
       // Where to stand to look at it: the point just in front of the bay.
-      const front = new THREE.Vector3(0, 0, FACE_D + 0.2).applyAxisAngle(new THREE.Vector3(0, 1, 0), theta);
+      const front = new THREE.Vector3(0, 0, f.depth + 0.3).applyAxisAngle(new THREE.Vector3(0, 1, 0), theta);
       this.bays.push({
-        face,
-        index: i,
-        section: sec,
+        place: e.place,
+        sideIndex: e.sideIndex,
+        sectionIndex: e.sectionIndex,
+        section: e.section,
+        fixture: f,
+        fixtureName: e.fixtureName,
         group: g,
         w,
         x,
@@ -515,45 +596,81 @@
         fx: x + front.x,
         fz: z + front.z,
         corridor,
+        faceSide,
         signMat,
         state: "empty",
         items: [],
       });
     }
 
-    hangingSign(c, x) {
+    hangingSign(c) {
       const tex = canvasTexture(768, 256, (g, w, h) => {
         g.fillStyle = c.cold ? C.cold : C.sign;
         g.fillRect(0, 0, w, h);
-        g.fillStyle = "rgba(0,0,0,0.18)";
-        g.fillRect(0, 0, 220, h);
         g.fillStyle = "#fff";
-        g.textAlign = "center";
         g.textBaseline = "middle";
-        g.font = c.number ? "900 150px system-ui, sans-serif" : "110px system-ui, sans-serif";
-        g.fillText(c.number || c.icon, 110, h / 2 + 8);
-        g.textAlign = "left";
         const parts = c.sub.split(" · ");
-        const lh = h / (parts.length + 1);
-        parts.forEach((p, i) => g.fillText(fit(g, p, w - 270, 52, 800, 20), 250, lh * (i + 1) + 4));
+        let left = 40;
+        if (c.number || c.icon) {
+          g.fillStyle = "rgba(0,0,0,0.18)";
+          g.fillRect(0, 0, 220, h);
+          g.fillStyle = "#fff";
+          g.textAlign = "center";
+          g.font = c.number && /\d/.test(c.number) ? "900 150px system-ui, sans-serif" : "110px system-ui, sans-serif";
+          g.fillText(c.number || c.icon, 110, h / 2 + 8);
+          left = 250;
+        }
+        g.textAlign = "left";
+        const lines = c.number && /\d/.test(c.number) ? parts : [c.label, ...parts.filter((p) => p !== c.label)].slice(0, 3);
+        const lh = h / (lines.length + 1);
+        lines.forEach((p, i) => g.fillText(fit(g, p, w - left - 20, 52, 800, 20), left, lh * (i + 1) + 4));
       });
       // Two single-sided faces so it reads correctly from both ends.
       const mat = new THREE.MeshBasicMaterial({ map: tex, toneMapped: false });
       for (const rot of [Math.PI, 0]) {
         const m = new THREE.Mesh(new THREE.PlaneGeometry(1.9, 0.63), mat);
-        m.position.set(x, 3.05, Z0 + 0.6 + (rot ? -0.01 : 0.01));
+        m.position.set(c.x, 3.25, Z0 + 0.6 + (rot ? -0.01 : 0.01));
         m.rotation.y = rot;
         this.scene.add(m);
       }
-      for (const dx of [-0.8, 0.8]) block(this.scene, 0x888888, 0.01, CEILING - 3.36, 0.01, x + dx, (CEILING + 3.36) / 2, Z0 + 0.6);
+      for (const dx of [-0.8, 0.8]) this.api.block(this.scene, 0x888888, 0.01, CEILING - 3.56, 0.01, c.x + dx, (CEILING + 3.56) / 2, Z0 + 0.6);
+    }
+
+    // Big department names high on the walls, over each department's run.
+    departmentSigns() {
+      const walls = [
+        { bays: this.bays.filter((b) => b.corridor === 0 && b.faceSide === "left"), axis: "z", at: this.xMax - 0.02, rot: -Math.PI / 2 },
+        { bays: this.bays.filter((b) => b.corridor === this.corridors.length - 1 && b.faceSide === "right"), axis: "z", at: this.xMin + 0.02, rot: Math.PI / 2 },
+        { bays: this.bays.filter((b) => b.faceSide === "back"), axis: "x", at: this.zMax - 0.07, rot: Math.PI },
+      ];
+      for (const wall of walls) {
+        const groups = [];
+        for (const b of wall.bays) {
+          const last = groups[groups.length - 1];
+          if (last && last.place === b.place) last.bays.push(b);
+          else groups.push({ place: b.place, bays: [b] });
+        }
+        for (const { place, bays } of groups) {
+          const lo = Math.min(...bays.map((b) => b[wall.axis] - b.w / 2));
+          const hi = Math.max(...bays.map((b) => b[wall.axis] + b.w / 2));
+          const len = Math.min(hi - lo - 0.4, 6);
+          const m = plane(signTexture([place.label.toUpperCase()], place.cold ? C.cold : C.sign, 1024, 180), len, len * 0.176);
+          if (wall.axis === "z") m.position.set(wall.at, 3.55, (lo + hi) / 2);
+          else m.position.set((lo + hi) / 2, 3.55, wall.at);
+          m.rotation.y = wall.rot;
+          this.scene.add(m);
+        }
+      }
     }
 
     buildFront() {
-      // Checkout lanes to the right of the entrance.
-      for (let j = 0; j < 3; j++) {
-        const x = this.cx - 2 - j * 2.8;
+      // Checkout lanes on the left, the entrance on the right by produce.
+      this.checkouts = [];
+      for (let j = 0; j < 4; j++) {
+        const x = this.xMax - 3.5 - j * 2.8;
+        const z = 2.6;
         const g = new THREE.Group();
-        g.position.set(x, 0, -0.1);
+        g.position.set(x, 0, z);
         this.scene.add(g);
         const parts = [
           block(g, C.checkout, 0.8, 0.88, 2.4, 0, 0.44, 0),
@@ -572,21 +689,23 @@
           p.userData.checkout = true;
           this.pickables.add(p);
         }
+        this.checkouts.push({ x, z });
       }
-
-      // Sliding doors behind the entrance.
-      const ex = this.cx + 5;
-      const glass = new THREE.MeshLambertMaterial({ color: 0xa9d2ea, transparent: true, opacity: 0.55 });
-      block(this.scene, glass, 1.2, 2.4, 0.04, ex - 0.62, 1.2, this.zMin + 0.03);
-      block(this.scene, glass, 1.2, 2.4, 0.04, ex + 0.62, 1.2, this.zMin + 0.03);
-      block(this.scene, 0x6b7780, 2.6, 0.12, 0.08, ex, 2.44, this.zMin + 0.04);
-      const welcome = plane(signTexture(["WELCOME", this.store.adapter.name], C.sign, 1024, 256), 3.6, 0.9);
-      welcome.position.set(ex, 3.2, this.zMin + 0.02);
-      this.scene.add(welcome);
       const lanes = plane(signTexture(["CHECKOUT"], "#e2462f", 768, 160), 2.4, 0.5);
-      lanes.position.set(this.cx - 4.8, 3.0, -0.1);
+      lanes.position.set(this.xMax - 3.5 - 1.5 * 2.8, 3.4, 2.6);
       lanes.rotation.y = Math.PI;
       this.scene.add(lanes);
+
+      // Sliding doors behind the entrance.
+      const ex = (this.corridors[this.corridors.length - 1].x + this.corridors[this.corridors.length - 2].x) / 2;
+      this.entranceX = ex;
+      const glass = new THREE.MeshLambertMaterial({ color: 0xa9d2ea, transparent: true, opacity: 0.55 });
+      block(this.scene, glass, 1.2, 2.4, 0.04, ex - 0.62, 1.2, this.zMin + 0.08);
+      block(this.scene, glass, 1.2, 2.4, 0.04, ex + 0.62, 1.2, this.zMin + 0.08);
+      block(this.scene, 0x6b7780, 2.6, 0.12, 0.08, ex, 2.44, this.zMin + 0.09);
+      const welcome = plane(signTexture(["WELCOME", this.store.adapter.name], C.sign, 1024, 256), 3.6, 0.9);
+      welcome.position.set(ex, 3.3, this.zMin + 0.07);
+      this.scene.add(welcome);
     }
 
     // Standing spots, linked like Street View photo points.
@@ -600,17 +719,15 @@
         a.links.add(b);
         b.links.add(a);
       };
-      const N = this.corridors.length;
       const stops = Math.round(L / STEP);
       let prevFront = null;
       let prevBack = null;
-      for (let k = 0; k < N; k++) {
-        const x = -k * SPACING;
-        const f = add(`f${k}`, x, Z0 - 1.5, { zone: "front", corridor: k });
-        const b = add(`b${k}`, x, Z0 + L + 1.5, { zone: "back", corridor: k });
+      this.corridors.forEach((c, k) => {
+        const f = add(`f${k}`, c.x, this.frontLane, { zone: "front", corridor: k });
+        const b = add(`b${k}`, c.x, this.backLane, { zone: "back", corridor: k });
         let prev = f;
         for (let i = 0; i < stops; i++) {
-          const s = add(`c${k}_${i}`, x, Z0 + (i + 0.5) * STEP, { zone: "aisle", corridor: k });
+          const s = add(`c${k}_${i}`, c.x, Z0 + (i + 0.5) * STEP, { zone: "aisle", corridor: k });
           link(prev, s);
           prev = s;
         }
@@ -619,10 +736,9 @@
         if (prevBack) link(prevBack, b);
         prevFront = f;
         prevBack = b;
-      }
-      const ex = this.cx + 5;
-      const entrance = add("entrance", ex, 0.4, { zone: "entrance" });
-      const fronts = [...this.nodes.values()].filter((n) => n.zone === "front").sort((a, b) => Math.abs(a.x - ex) - Math.abs(b.x - ex));
+      });
+      const entrance = add("entrance", this.entranceX, 2.2, { zone: "entrance" });
+      const fronts = [...this.nodes.values()].filter((n) => n.zone === "front").sort((a, b) => Math.abs(a.x - entrance.x) - Math.abs(b.x - entrance.x));
       fronts.slice(0, 2).forEach((n) => link(entrance, n));
 
       // Each bay remembers the closest standing spot.
@@ -630,9 +746,6 @@
         let best = null;
         let bestD = Infinity;
         for (const n of this.nodes.values()) {
-          if (bay.corridor != null && n.corridor !== bay.corridor) continue;
-          if (bay.corridor != null && n.zone !== "aisle") continue;
-          if (bay.corridor == null && n.zone !== "back") continue;
           const d = Math.hypot(n.x - bay.fx, n.z - bay.fz);
           if (d < bestD) {
             bestD = d;
@@ -657,12 +770,11 @@
       const here = this.move ? this.move.target : this.node;
       const lookLen = Math.hypot(look.x, look.z) || 1;
       const wanted = [];
-      let busy = 0;
+      let busy = this.store.pendingShelves();
       for (const b of this.bays) {
         const d = Math.hypot(b.fx - at.x, b.fz - at.z);
         const dHere = Math.hypot(b.fx - this.pos.x, b.fz - this.pos.z);
         if (b.state !== "empty" && dHere > UNSTOCK_RADIUS && d > UNSTOCK_RADIUS) this.unstock(b);
-        else if (b.state === "loading" && !this.isShelfReady(b)) busy++;
         else if ((b.state === "empty" || b.state === "queued") && d < STOCK_RADIUS) {
           // Shelves in front of you come first; then the nearest.
           const facing = ((b.x - at.x) * look.x + (b.z - at.z) * look.z) / (lookLen * (Math.hypot(b.x - at.x, b.z - at.z) || 1));
@@ -700,7 +812,7 @@
     }
 
     isShelfReady(bay) {
-      const s = this.store.shelves.get(bay.section.query);
+      const s = this.store.shelfState(bay.section);
       return !!s && s.status === "ready";
     }
 
@@ -710,7 +822,7 @@
       this.prepareBay(bay);
       bay.state = "loading";
       const token = (bay.token = {});
-      const s = this.store.shelf(bay.section.query);
+      const s = this.store.shelf(bay.section, bay.place);
       const done = () => {
         if (this.destroyed || bay.token !== token) return;
         this.clearPlaceholder(bay);
@@ -727,12 +839,15 @@
     // While a shelf waits on the store: cardboard boxes and a sign, so it
     // doesn't look like the shelf is simply empty.
     placeholder(bay) {
+      const f = bay.fixture;
       const g = new THREE.Group();
       const n = Math.max(2, Math.floor(bay.w / 0.55));
-      for (const y of BOARDS) {
+      for (const row of f.rows) {
+        const h = Math.min(0.2, row.maxH);
         for (let i = 0; i < n; i++) {
           const x = -bay.w / 2 + ((i + 0.5) * bay.w) / n;
-          block(g, C.cardboard, 0.34, 0.22, 0.3, x, y + 0.11, FACE_D / 2);
+          const box = block(g, C.cardboard, 0.34, h, 0.26, x, row.y + h / 2, row.z);
+          box.rotation.x = row.kind === "crate" ? row.lean : 0;
         }
       }
       if (!this.stockingTex) {
@@ -750,11 +865,16 @@
         new THREE.PlaneGeometry(Math.min(bay.w * 0.8, 1.2), 0.19),
         new THREE.MeshBasicMaterial({ map: this.stockingTex, toneMapped: false })
       );
-      sign.position.set(0, 1.02, FACE_D + 0.01);
+      sign.position.set(0, this.noteY(bay), f.depth + 0.03);
       g.add(sign);
       bay.placeholder = g;
       bay.stocked.add(g);
       this.invalidate();
+    }
+
+    // A good height for a notice on this fixture: just above its top row.
+    noteY(bay) {
+      return Math.max(...bay.fixture.rows.map((r) => r.y)) + 0.14;
     }
 
     clearPlaceholder(bay) {
@@ -796,7 +916,7 @@
         Math.min(bay.w * 0.9, 1.4),
         0.22
       );
-      m.position.set(0, 1.0, FACE_D + 0.02);
+      m.position.set(0, this.noteY(bay), bay.fixture.depth + 0.03);
       if (retry) {
         m.userData.retry = bay;
         this.pickables.add(m);
@@ -804,81 +924,148 @@
       bay.stocked.add(m);
     }
 
+    // Put products on the fixture's rows, eye-level rows first. Packages
+    // stand (or lean back, in counters and chests) in facings; loose
+    // produce is heaped in crates.
     fill(bay, products) {
       bay.state = "ready";
       if (!products.length) return this.shelfNote(bay, "Sold out today", false);
 
-      const rows = BOARDS.length;
-      const perRow = Math.ceil(products.length / rows);
-      const inner = bay.w - 0.12;
+      const rows = bay.fixture.rows;
+      const inner = bay.w - 0.1;
+      const crates = rows[0].kind === "crate";
+      const fits = crates ? Math.max(1, Math.floor(inner / 0.3)) : Infinity;
+      const perRow = Math.min(fits, Math.ceil(products.length / rows.length));
+      const shown = products.slice(0, perRow * rows.length);
       const slotW = inner / perRow;
-      const pw = Math.min(0.22, slotW * 0.8);
-      const gap = 0.015;
-      // Wide shelves get several facings of each product, like a real store.
-      const facings = clamp(Math.floor((slotW * 0.92) / (pw + gap)), 1, 4);
-      const sideMat = lambert(0xf1f1ee);
-      const tagRows = BOARDS.map(() => []);
+      const tagRows = rows.map(() => []);
 
-      products.forEach((p, idx) => {
-        const row = Math.floor(idx / perRow);
-        const col = idx % perRow;
-        const y = BOARDS[row];
-        const x0 = -inner / 2 + col * slotW;
-        const front = new THREE.MeshLambertMaterial({ color: 0xffffff });
-        const mats = [sideMat, sideMat, sideMat, sideMat, front, sideMat];
-        const span = facings * pw + (facings - 1) * gap;
-        const start = x0 + (slotW - span) / 2 + pw / 2;
-        const meshes = [];
-        const h0 = pw * 1.3;
-        for (let f = 0; f < facings; f++) {
-          const m = new THREE.Mesh(unitBox, mats);
-          m.scale.set(pw, h0, 0.12);
-          m.position.set(start + f * (pw + gap), y + h0 / 2, FACE_D - 0.1);
-          m.userData.product = p;
-          bay.stocked.add(m);
-          this.pickables.add(m);
-          meshes.push(m);
-        }
-        const setHeight = (aspect) => {
-          const ht = clamp(pw * aspect, 0.08, 0.5);
-          for (const m of meshes) {
-            m.scale.y = ht;
-            m.position.y = y + ht / 2;
-          }
-        };
-        const token = bay.token;
-        if (p.image) {
-          bay.imageUrls.push(p.image);
-          acquireTexture(p.image).then(
-            ({ texture, aspect }) => {
-              if (bay.token !== token) return;
-              texture.userData.shared = true; // owned by the cache, not the material
-              front.map = texture;
-              front.needsUpdate = true;
-              setHeight(aspect);
-              this.invalidate();
-            },
-            () => {
-              if (bay.token !== token) return;
-              front.map = labelTexture(p.name);
-              front.needsUpdate = true;
-              this.invalidate();
-            }
-          );
-        } else {
-          front.map = labelTexture(p.name);
-        }
-        const item = { p, meshes, front, x0, slotW, y, row };
+      shown.forEach((p, idx) => {
+        const r = Math.floor(idx / perRow);
+        const row = rows[r];
+        const x0 = -inner / 2 + (idx % perRow) * slotW;
+        const item = row.kind === "crate" ? this.crate(bay, row, p, x0, slotW) : this.facings(bay, row, p, x0, slotW);
+        Object.assign(item, { p, x0, slotW, row });
         bay.items.push(item);
-        tagRows[row].push(item);
+        tagRows[r].push(item);
       });
 
-      tagRows.forEach((items, r) => items.length && this.tagStrip(bay, BOARDS[r], items));
+      rows.forEach((row, r) => {
+        if (!tagRows[r].length) return;
+        if (row.kind === "crate") tagRows[r].forEach((it) => this.stakeTag(bay, it));
+        else this.tagStrip(bay, row, tagRows[r]);
+      });
       this.refreshBadges();
     }
 
-    // The price tags along the front edge of one shelf.
-    tagStrip(bay, y, items) {
+    // Packages, side by side: wide slots get several facings of each.
+    facings(bay, row, p, x0, slotW) {
+      const pw = Math.min(0.22, slotW * 0.8);
+      const gap = 0.015;
+      const n = clamp(Math.floor((slotW * 0.92) / (pw + gap)), 1, 4);
+      const sideMat = lambert(0xf1f1ee);
+      const front = new THREE.MeshLambertMaterial({ color: 0xffffff });
+      const mats = [sideMat, sideMat, sideMat, sideMat, front, sideMat];
+      const span = n * pw + (n - 1) * gap;
+      const start = x0 + (slotW - span) / 2 + pw / 2;
+      const meshes = [];
+      const h0 = Math.min(pw * 1.3, row.maxH);
+      for (let i = 0; i < n; i++) {
+        // A pivot at the product's base, so leaning products lean from the bottom.
+        const pivot = new THREE.Group();
+        pivot.position.set(start + i * (pw + gap), row.y, row.z);
+        pivot.rotation.x = -row.lean;
+        const m = new THREE.Mesh(unitBox, mats);
+        m.scale.set(pw, h0, 0.12);
+        m.position.y = h0 / 2;
+        m.userData.product = p;
+        pivot.add(m);
+        bay.stocked.add(pivot);
+        this.pickables.add(m);
+        meshes.push(m);
+      }
+      const setHeight = (aspect) => {
+        const ht = clamp(pw * aspect, 0.08, row.maxH);
+        for (const m of meshes) {
+          m.scale.y = ht;
+          m.position.y = ht / 2;
+        }
+      };
+      this.photo(bay, p, front, setHeight);
+      return { meshes, front };
+    }
+
+    // A crate of loose produce: the product photo tiled into a heap.
+    crate(bay, row, p, x0, slotW) {
+      const cw = Math.min(0.5, slotW * 0.9);
+      const cd = row.crateD;
+      const g = new THREE.Group();
+      g.position.set(x0 + slotW / 2, row.y, row.z);
+      g.rotation.x = row.lean; // back edge up, so the heap faces the shopper
+      const wood = lambert(0x9c7148);
+      const sides = [
+        block(g, wood, cw, 0.1, 0.02, 0, 0.05, cd / 2),
+        block(g, wood, cw, 0.1, 0.02, 0, 0.05, -cd / 2),
+        block(g, wood, 0.02, 0.1, cd, cw / 2, 0.05, 0),
+        block(g, wood, 0.02, 0.1, cd, -cw / 2, 0.05, 0),
+      ];
+      const front = new THREE.MeshLambertMaterial({ color: 0xffffff });
+      const heap = new THREE.Mesh(this.heapGeometry(cw - 0.03, cd - 0.03), front);
+      heap.rotation.x = -Math.PI / 2;
+      heap.position.y = 0.08;
+      g.add(heap);
+      for (const m of [heap, ...sides]) {
+        m.userData.product = p;
+        this.pickables.add(m);
+      }
+      bay.stocked.add(g);
+      this.photo(bay, p, front, () => {});
+      return { meshes: [heap], front, crate: g, cw, cd };
+    }
+
+    // A flat patch whose texture repeats about every 11 cm, like a heap of
+    // apples; shared between crates of the same size.
+    heapGeometry(w, d) {
+      const key = `${w.toFixed(2)}x${d.toFixed(2)}`;
+      this.heaps = this.heaps || new Map();
+      if (!this.heaps.has(key)) {
+        const geo = new THREE.PlaneGeometry(w, d);
+        const uv = geo.attributes.uv;
+        for (let i = 0; i < uv.count; i++) uv.setXY(i, (uv.getX(i) * w) / 0.11, (uv.getY(i) * d) / 0.11);
+        geo.userData.shared = true;
+        this.heaps.set(key, geo);
+      }
+      return this.heaps.get(key);
+    }
+
+    // Load a product's photo onto its material (or a name label if there's none).
+    photo(bay, p, front, setHeight) {
+      const token = bay.token;
+      if (!p.image) {
+        front.map = labelTexture(p.name);
+        return;
+      }
+      bay.imageUrls.push(p.image);
+      acquireTexture(p.image).then(
+        ({ texture, aspect }) => {
+          if (bay.token !== token) return;
+          texture.userData.shared = true; // owned by the cache, not the material
+          front.map = texture;
+          front.needsUpdate = true;
+          setHeight(aspect);
+          this.invalidate();
+        },
+        () => {
+          if (bay.token !== token) return;
+          front.map = labelTexture(p.name);
+          front.needsUpdate = true;
+          this.invalidate();
+        }
+      );
+    }
+
+    // The price tags along the front edge of one row.
+    tagStrip(bay, row, items) {
       const cw = Math.min(4096, Math.round(bay.w * PX_PER_M));
       const ch = Math.round(TAG_H * PX_PER_M);
       const px = (m) => ((m + bay.w / 2) / bay.w) * cw;
@@ -888,29 +1075,47 @@
         for (const it of items) {
           const tw = Math.min(it.slotW * 0.94, 0.34) * (cw / bay.w);
           const tx = px(it.x0) + (it.slotW * (cw / bay.w) - tw) / 2;
-          g.fillStyle = "#fff";
-          g.fillRect(tx, 4, tw, ch - 8);
-          g.fillStyle = "#ffd84a";
-          g.fillRect(tx, 4, 8, ch - 8);
-          g.fillStyle = "#56605a";
-          g.textBaseline = "alphabetic";
-          g.textAlign = "left";
-          g.fillText(fit(g, it.p.name, tw - 22, 14, 500, 10), tx + 14, 22);
-          g.fillStyle = "#1d2320";
-          const price = it.p.price == null ? "See price" : `$${it.p.price.toFixed(2)}`;
-          g.fillText(fit(g, price, tw * 0.62, it.p.price == null ? 18 : 34, 900, 12), tx + 14, ch - 14);
-          if (it.p.unitPrice) {
-            g.fillStyle = "#56605a";
-            g.textAlign = "right";
-            g.fillText(fit(g, it.p.unitPrice, tw * 0.36, 12, 500, 8), tx + tw - 6, ch - 16);
-          }
+          this.drawTag(g, it.p, tx, 4, tw, ch - 8);
         }
       });
       const m = plane(tex, bay.w, TAG_H);
-      m.position.set(0, y - TAG_H / 2, FACE_D + 0.003);
+      m.position.set(0, row.tag.y, row.tag.z);
+      m.rotation.x = -row.tag.lean;
       m.userData.tags = { bay, items };
       bay.stocked.add(m);
       this.pickables.add(m);
+    }
+
+    // A little price sign on a stake at the back of a produce crate.
+    stakeTag(bay, it) {
+      const tex = canvasTexture(240, 96, (g, w, h) => this.drawTag(g, it.p, 0, 0, w, h));
+      const m = plane(tex, 0.2, 0.08);
+      m.position.set(0, 0.2, -it.cd / 2);
+      m.rotation.x = -it.row.lean; // stand upright again
+      m.userData.product = it.p;
+      it.crate.add(m);
+      this.pickables.add(m);
+      const stake = block(it.crate, lambert(0x9c7148), 0.012, 0.16, 0.012, 0, 0.1, -it.cd / 2 - 0.01);
+      stake.userData.product = it.p;
+    }
+
+    drawTag(g, p, x, y, w, h) {
+      g.fillStyle = "#fff";
+      g.fillRect(x, y, w, h);
+      g.fillStyle = "#ffd84a";
+      g.fillRect(x, y, 8, h);
+      g.fillStyle = "#56605a";
+      g.textBaseline = "alphabetic";
+      g.textAlign = "left";
+      g.fillText(fit(g, p.name, w - 22, Math.round(h * 0.22), 500, 9), x + 14, y + h * 0.3);
+      g.fillStyle = "#1d2320";
+      const price = p.price == null ? "See price" : `$${p.price.toFixed(2)}`;
+      g.fillText(fit(g, price, w * 0.62, p.price == null ? Math.round(h * 0.3) : Math.round(h * 0.52), 900, 10), x + 14, y + h * 0.86);
+      if (p.unitPrice) {
+        g.fillStyle = "#56605a";
+        g.textAlign = "right";
+        g.fillText(fit(g, p.unitPrice, w * 0.36, Math.round(h * 0.18), 500, 8), x + w - 6, y + h * 0.84);
+      }
     }
 
     refreshBadges() {
@@ -920,7 +1125,7 @@
           if (it.badgeQty === qty) continue;
           it.badgeQty = qty;
           if (it.badge) {
-            bay.stocked.remove(it.badge);
+            it.badge.parent.remove(it.badge);
             disposeTree(it.badge);
             it.badge = null;
           }
@@ -938,7 +1143,7 @@
           });
           const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, toneMapped: false }));
           s.scale.set(0.15, 0.047, 1);
-          s.position.set(it.x0 + it.slotW / 2, it.y + 0.04, FACE_D + 0.02);
+          s.position.set(it.x0 + it.slotW / 2, it.row.y + 0.06, it.row.z + 0.12);
           bay.stocked.add(s);
           it.badge = s;
         }
@@ -1010,15 +1215,16 @@
 
     goToSection(place, sideIndex = 0, sectionIndex = 0) {
       const bay =
-        this.bays.find((b) => b.face.place === place && b.face.sideIndex === sideIndex && b.index + b.face.offset === sectionIndex) ||
-        this.bays.find((b) => b.face.place === place && b.face.sideIndex === sideIndex) ||
-        this.bays.find((b) => b.face.place === place);
+        this.bays.find((b) => b.place === place && b.sideIndex === sideIndex && b.sectionIndex === sectionIndex) ||
+        this.bays.find((b) => b.place === place && b.sideIndex === sideIndex) ||
+        this.bays.find((b) => b.place === place);
       if (!bay) return;
       this.walkTo(bay.node, { lookAt: { x: bay.x, z: bay.z }, flash: bay });
     }
 
     goToEntrance() {
-      this.walkTo(this.nodes.get("entrance"), { lookAt: { x: this.nodes.get("entrance").x, z: 10 } });
+      const e = this.nodes.get("entrance");
+      this.walkTo(e, { lookAt: { x: e.x, z: e.z + 10 } });
     }
 
     lookDir() {
@@ -1312,16 +1518,16 @@
       let sides = [];
       if (n.zone === "aisle") {
         const c = this.corridors[n.corridor];
-        title = c.label + (c.number ? ` · ${c.sub}` : "");
-        const bayAt = (face) => {
-          const list = this.bays.filter((b) => b.face === face);
+        title = c.label + (c.number && /\d/.test(c.number) ? ` · ${c.sub}` : "");
+        const bayAt = (faceSide) => {
+          const list = this.bays.filter((b) => b.corridor === n.corridor && b.faceSide === faceSide);
           return list.sort((a, b) => Math.abs(a.z - n.z) - Math.abs(b.z - n.z))[0];
         };
         if (Math.abs(look.z) > 0.6) {
-          const [l, r] = look.z > 0 ? [c.left, c.right] : [c.right, c.left];
+          const [l, r] = look.z > 0 ? ["left", "right"] : ["right", "left"];
           sides = [`◀ ${bayAt(l).section.name}`, `${bayAt(r).section.name} ▶`];
         }
-      } else if (n.zone === "back") title = "Back of the store · Bakery · Meat & Seafood";
+      } else if (n.zone === "back") title = "Back of the store · Dairy · Meat & Seafood · Deli · Bakery";
       else if (n.zone === "front") title = "Front of the store";
       else title = "Entrance";
       const bay = this.bayInView();
@@ -1333,7 +1539,7 @@
 
     openFlat() {
       const bay = this.bayInView();
-      if (bay && bay.face.place) this.store.goToFlat(bay.face.place, bay.face.sideIndex, bay.index + bay.face.offset);
+      if (bay) this.store.goToFlat(bay.place, bay.sideIndex, bay.sectionIndex);
       else this.store.goMap();
     }
 
@@ -1366,7 +1572,7 @@
         else g.fillRect(X(b.x + hw), Y(b.z) - 2, hw * 2 * sx, 4);
       }
       g.fillStyle = "#e2462f";
-      for (let j = 0; j < 3; j++) g.fillRect(X(this.cx - 2 - j * 2.8) - 2, Y(1.1), 4, 2.4 * sz);
+      for (const c of this.checkouts) g.fillRect(X(c.x) - 2, Y(c.z + 1.2), 4, 2.4 * sz);
       // You.
       const px = X(this.pos.x);
       const py = Y(this.pos.z);
@@ -1502,6 +1708,9 @@
       matCache.clear();
       releaseAllTextures();
       if (this.stockingTex) this.stockingTex.dispose();
+      for (const m of this.glassMats.values()) m.dispose();
+      for (const geo of (this.heaps || new Map()).values()) geo.dispose();
+      if (this.glowMat) this.glowMat.dispose();
       this.renderer.dispose();
       // Browsers allow only a handful of live WebGL contexts per page, so
       // give this one back now rather than whenever it's garbage collected.

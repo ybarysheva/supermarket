@@ -46,15 +46,18 @@ await p.locator(".sm-ask input").fill("peanut butter");
 await p.locator(".sm-ask button").click();
 await arrived(p);
 t.check("asking walks you to the right shelf", /Spreads/.test(await p.locator(".sm-w-loc").textContent()));
-t.check("stocks the shelves near you", await until(() => store(p, (s) => s.walker.bays.some((b) => b.section.name === "Spreads" && b.items.length > 0))));
+t.check("stocks the shelves near you", await until(() => store(p, (s) => s.walker.bays.some((b) => b.section.name === "Peanut Butter & Spreads" && b.items.length > 0))));
 
 // Pick a product up by clicking where it is on screen.
 const spot = await store(p, (s) => {
   const w = s.walker;
-  const bay = w.bays.find((b) => b.section.name === "Spreads");
-  const v = bay.items[0].meshes[0].getWorldPosition(new window.THREE.Vector3()).project(w.camera);
+  const bay = w.bays.find((b) => b.section.name === "Peanut Butter & Spreads");
+  // The product nearest the middle of the view (long shelves run off-screen).
   const r = w.canvas.getBoundingClientRect();
-  return { x: r.left + ((v.x + 1) / 2) * r.width, y: r.top + ((1 - v.y) / 2) * r.height, name: bay.items[0].p.name };
+  const on = bay.items
+    .map((it) => ({ it, v: it.meshes[0].getWorldPosition(new window.THREE.Vector3()).project(w.camera) }))
+    .sort((a, b) => Math.hypot(a.v.x, a.v.y) - Math.hypot(b.v.x, b.v.y))[0];
+  return { x: r.left + ((on.v.x + 1) / 2) * r.width, y: r.top + ((1 - on.v.y) / 2) * r.height - 12, name: on.it.p.name };
 });
 await p.mouse.click(spot.x, spot.y);
 t.check("clicking a product picks it up", (await p.locator(".sm-closeup h2").textContent().catch(() => "")) === spot.name);
@@ -110,7 +113,7 @@ t.check("the shelf you asked for is fetched first", next === "milk gallon", next
 await arrived(p);
 const stocked = await until(() =>
   store(p, (s) => {
-    const spreads = s.walker.bays.find((b) => b.section.name === "Spreads");
+    const spreads = s.walker.bays.find((b) => b.section.name === "Peanut Butter & Spreads");
     return spreads.state === "empty" ? "emptied" : null;
   })
 );
@@ -121,7 +124,7 @@ t.check("never more than two shelves wait on the store at once", maxWaiting <= 2
 
 // Shopping list: sorted, located, ticked off by the cart.
 await p.locator("button", { hasText: "📝 List" }).click();
-await p.locator(".sm-list textarea").fill("eggs, bread, unicorn food");
+await p.locator(".sm-list textarea").fill("eggs, bread, unicorn");
 await p.locator(".sm-list-add button").click();
 const where = await p.locator(".sm-list li").allTextContents();
 t.check("the list is in walking order", /bread/.test(where[0]) && /eggs/.test(where[1]) && /unicorn/.test(where[2]), where);
@@ -167,7 +170,7 @@ await until(() => store(r, (s) => s.view === "walk"));
 await r.locator(".sm-ask input").fill("ice cream");
 await r.locator(".sm-ask button").click();
 const jump = await store(r, (s) => !s.walker.move || s.walker.move.speed === Infinity);
-t.check("with reduced motion you jump instead of walking", jump && (await until(() => store(r, (s) => /Aisle 6/.test(s.walker.locTitle.textContent)))));
+t.check("with reduced motion you jump instead of walking", jump && (await until(() => store(r, (s) => /Dairy & Drinks/.test(s.walker.locTitle.textContent)))));
 
 await browser.close();
 t.done();
