@@ -19,6 +19,7 @@
       tagline: "Fresh groceries, delivered",
       searchIndex: "amazonfresh",
       almBrandId: "QW1hem9uIEZyZXNo", // base64("Amazon Fresh")
+      rootNode: "10329849011", // all of Amazon Fresh
     },
     wholefoods: {
       id: "wholefoods",
@@ -31,7 +32,7 @@
 
   const CACHE_MINUTES = 30;
   const MAX_PER_SECTION = 60; // a whole results page
-  const MAX_GROUPS = 16; // sub-category sections read for one shelf
+  const MAX_GROUPS = 8; // sub-category sections read for one shelf
 
   // Results are kept in memory while the store is open, not in the page's
   // sessionStorage: Amazon's own scripts need that space (a full store's
@@ -300,8 +301,14 @@
       }
     }
 
+    // A request that hangs would hold one of the two slots forever and stop
+    // the store stocking shelves: give up after 20 seconds.
     async function fetchPage(url) {
-      const res = await throttle(() => pageFetch(url, { credentials: "include" }));
+      const res = await throttle(() => {
+        const ctrl = typeof AbortController === "function" ? new AbortController() : null;
+        const timer = ctrl && setTimeout(() => ctrl.abort(), 20000);
+        return pageFetch(url, { credentials: "include", signal: ctrl && ctrl.signal }).finally(() => clearTimeout(timer));
+      });
       if (signedOut(res)) throw new Error(SIGN_IN);
       if (!res.ok) throw new Error(`The store didn't answer (HTTP ${res.status}).`);
       return res.text();
@@ -352,18 +359,24 @@
     // `best`: in best-seller order (a shelf), rather than Amazon's default
     // "Featured" order, which for a category with no search words mixes in
     // oddities.
+    // A category's place in the store: Amazon Fresh › department › category.
+    const pathOf = (section) =>
+      [store.rootNode, section.departmentNode !== section.category.node && section.departmentNode, section.category.node].filter(Boolean).join(",");
+
     async function fetchResults(query, node, page = 1, best = false) {
       const url = new URL("/s", origin);
       if (query) url.searchParams.set("k", query);
       url.searchParams.set("i", store.searchIndex);
-      if (node) url.searchParams.set("rh", `n:${node}`);
+      // `node` may be a path ("root,department,category"): like Amazon
+      // Fresh's own "See more" links, it keeps the results inside the store
+      // (asked for alone, some categories return all of regular Amazon).
+      if (node) {
+        url.searchParams.set("rh", String(node).split(",").map((n) => `n:${n}`).join(","));
+        if (store.rootNode) url.searchParams.set("bbn", store.rootNode);
+      }
       if (best) url.searchParams.set("s", "exact-aware-popularity-rank");
       if (page > 1) url.searchParams.set("page", String(page));
       const r = parsePage(await fetchPage(url.href), origin);
-      // A page with nothing you can add to the store's cart (Office &
-      // School's "Presentation Supplies" is all regular Amazon) has
-      // nothing from this store on it.
-      if (!r.products.some((p) => p.addForm && /\/local-market\//.test(p.addForm.action))) r.products = [];
       return r;
     }
 
@@ -419,7 +432,7 @@
       async searchShelf(section, place, cursor) {
         if (cursor && cursor.groups) {
           const g = cursor.groups[cursor.i];
-          const c = await cachedResults("", g.node, 1, true);
+          const c = await cachedResults("", `${cursor.path},${g.node}`, 1, true);
           const next = cursor.i + 1 < cursor.groups.length ? { ...cursor, i: cursor.i + 1 } : null;
           return { products: c.products.map((p, i) => ({ ...p, group: g.name, groupRank: i })), total: null, next };
         }
@@ -427,18 +440,20 @@
         const cat = section.category;
         // A category shelf carries its best sellers; a display of
         // "everything matching…" keeps Amazon's relevance order.
-        const r = await cachedResults(section.query, cat && cat.node, 1, !!cat);
+        const path = cat && pathOf(section);
+        const r = await cachedResults(section.query, path, 1, !!cat);
         // Only when the sidebar is about this category: on some pages it's
         // about all of Amazon Fresh, and its "sub-categories" are whole
         // departments (Frozen, Pantry Staples… under Fruit Snacks).
-        if (cat && r.here === String(cat.node) && r.children.length >= 2) return { ...r, next: { groups: r.children.slice(0, MAX_GROUPS), i: 0 } };
+        if (cat && r.here === String(cat.node) && r.children.length >= 2) return { ...r, next: { groups: r.children.slice(0, MAX_GROUPS), i: 0, path } };
         if (r.products.length || !cat) return r;
         // Amazon lists nothing when some categories are browsed directly;
         // search for the category's name instead, within its department,
         // then the whole store.
         const words = cat.name.replace(/&/g, " ").replace(/\s+/g, " ").trim();
-        for (const node of [section.departmentNode, null]) {
-          if (node === undefined) continue;
+        const dept = [store.rootNode, section.departmentNode].filter(Boolean).join(",");
+        for (const node of [dept, store.rootNode || null]) {
+          if (node === "") continue;
           const w = await cachedResults(words, node, 1, true);
           if (w.products.length) return { ...w, next: w.next && { ...w.next, query: words } };
         }

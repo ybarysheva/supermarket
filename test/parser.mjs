@@ -146,7 +146,7 @@ const result = await page.evaluate(async ({ html, realHtml, barHtml }) => {
   window.fetch = async (url) => {
     const u = new URL(url);
     if (u.pathname === "/s") asked.push(`${u.searchParams.get("k") || ""}|${u.searchParams.get("rh") || ""}`);
-    return new Response(u.pathname === "/s" && u.searchParams.get("rh") === "n:s0" ? card : "<html></html>");
+    return new Response(u.pathname === "/s" && /n:s0$/.test(u.searchParams.get("rh") || "") ? card : "<html></html>");
   };
   const browsed = await S.adapters.fresh().searchShelf(shelf("Nut & Seed Butters"));
   const fallback = { names: browsed.products.map((p) => p.name), asked };
@@ -171,7 +171,7 @@ const checks = [
   ["retries an expired add form with a fresh one", result.refreshed.ok && result.retried.join(",") === "POST /cart/add-to-cart/ref=fresh_atc,GET /s,POST /cart/add-to-cart/local-market/QW1hem9uIEZyZXNo/ref=fresh_atc"],
   ["says so when you're signed out", /signed out/.test(result.signedOut || "")],
   ["reads how many results there are in all", result.paging.page1.total === 1000 && result.paging.pageLast.total === 119],
-  ["a category shelf shows everything in its category", result.fallback.names.join() === "Almond Butter" && result.fallback.asked.join() === "|n:s0", result.fallback],
+  ["a category shelf shows everything in its category, within Amazon Fresh", result.fallback.names.join() === "Almond Butter" && result.fallback.asked.join() === "|n:10329849011,n:s,n:s0", result.fallback],
   ["brands: read from the sidebar's brand list", result.brands.branded.join("|") === "Justin's Nut Butter|365 by Whole Foods Market|Barney Butter", result.brands.branded],
   ["brands: guessed from the name when there's no list", result.brands.guessed.join("|") === "Barilla|De Cecco|365", result.brands.guessed],
   ["brands: kept together, the store brand beside the best seller, one-offs last", result.brands.order.join() === "1,4,5,7,3,6,2", result.brands.order],
