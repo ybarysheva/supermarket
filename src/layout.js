@@ -48,7 +48,7 @@
 
   const SIGNS = { produce: "🥬", bakery: "🥖", meat: "🥩", deli: "🥪", dairy: "🥛", frozen: "❄" };
   const SIDE_LABELS = { table: "Fruit & Vegetables", wetrack: "Salad & Herbs", cooler: "Refrigerated", shelf: "Nuts & Dried Fruit", rack: "Bread", case: "Cakes & Pastries", coffin: "Ice Cream Chests" };
-  const MAX_PER_SIDE = 8; // sections on one side of a center aisle
+  const MAX_PER_SIDE = 6; // sections on one side of a center aisle
 
   // ---- building ------------------------------------------------------------
 
@@ -65,11 +65,30 @@
 
   const slug = (s) => s.toLowerCase().replace(/&/g, "and").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
+  // How much fixture a category gets, from what the store turned out to
+  // carry the last time it was stocked (`sizes`: node → { n: products,
+  // groups: sub-categories, at }): room for each sub-category section and
+  // for its products, in 2.4 m bays, half a bay to three. Unknown: one bay.
+  let sizes = {};
+  // A category that had nothing from the store in the last week (Office &
+  // School's "Presentation Supplies" is all regular Amazon) gets no shelf.
+  const EMPTY_DAYS = 7;
+  const empty = (node) => {
+    const k = sizes[node];
+    return !!k && k.n === 0 && Date.now() - (k.at || 0) < EMPTY_DAYS * 86400000;
+  };
+  const baysFor = (node) => {
+    const k = sizes[node];
+    if (!k) return 1;
+    const columns = Math.max((k.groups || 0) * 3, Math.ceil((k.n || 0) / 5));
+    return Math.min(3, Math.max(0.5, (columns * 0.2) / 2.4));
+  };
+
   // A department's shelves: its subcategories, or the department itself if
-  // it has none.
+  // it has none; categories known to be empty are left out.
   function sectionsOf(dept, placeId) {
     const cats = dept.subs && dept.subs.length ? dept.subs : [{ node: dept.node, name: dept.name }];
-    return cats.map((c) => ({
+    return cats.filter((c) => !empty(c.node)).map((c) => ({
       id: `${placeId}/${slug(c.name)}-${c.node}`,
       name: c.name,
       query: "",
@@ -77,7 +96,7 @@
       department: dept.name,
       departmentNode: dept.node,
       category: { node: c.node, name: c.name },
-      bays: 1,
+      bays: baysFor(c.node),
     }));
   }
 
@@ -90,7 +109,8 @@
 
   // `catalog`: the store's departments, in its own order:
   // [{ node, name, subs: [{ node, name }] }]. Returns { places, plan }.
-  function buildLayout(catalog) {
+  function buildLayout(catalog, learned = {}) {
+    sizes = learned || {};
     const places = [];
     const byRole = { produce: [], bakery: [], meat: [], deli: [], dairy: [], frozen: [], aisle: [] };
     for (const d of catalog) {
@@ -104,6 +124,7 @@
       const depts = byRole[role];
       if (!depts.length) return null;
       const sections = depts.flatMap((d) => sectionsOf(d, role));
+      if (!sections.length) return null;
       const groups = new Map();
       // Seafood gets its own counter, on ice.
       const seafood = (name) => role === "meat" && /fish|seafood|shrimp|salmon|shellfish|crab|lobster|scallop/.test(name.toLowerCase());
@@ -191,10 +212,20 @@
           last.n += n;
         } else faces.push({ refs: [ref(r)], n });
       }
-      // An odd number of stretches: give a shared one's last run its own.
+      // An odd number of stretches: give a shared one's last run its own,
+      // or split the longest run in two, rather than leave a bare wall.
       if (faces.length % 2) {
         const k = faces.findIndex((f) => f.refs.length > 1);
         if (k >= 0) faces.splice(k + 1, 0, { refs: [faces[k].refs.pop()], n: 0 });
+        else {
+          const r = runs.reduce((a, b) => (b[2].sections.length > a[2].sections.length ? b : a), runs[0]);
+          if (r && r[2].sections.length > 1) {
+            const [id, i, sd] = r;
+            const [a, b] = split(sd.sections, 2);
+            places.find((p) => p.id === id).sides.splice(i, 1, { ...sd, sections: a }, { ...sd, sections: b });
+            return null; // sides moved: pack again
+          }
+        }
       }
       const out = [];
       for (let i = 0; i < faces.length; i += 2) out.push({ left: faces[i].refs, right: faces[i + 1] ? faces[i + 1].refs : [] });
@@ -202,9 +233,10 @@
     };
 
     // Left wing: dairy coolers on the wall, then the freezers.
-    const leftCorridors = pack(leftRuns()).map((c) => withPlace(c));
+    const packed = (runs) => pack(runs()) || pack(runs());
+    const leftCorridors = packed(leftRuns).map((c) => withPlace(c));
     // Right wing, by the entrance: produce and the bread racks.
-    const rightCorridors = pack(rightRuns()).map((c) => withPlace({ ...c, wide: true }));
+    const rightCorridors = packed(rightRuns).map((c) => withPlace({ ...c, wide: true }));
 
     const corridors = [
       ...leftCorridors,

@@ -46,10 +46,11 @@ function resultsPage(query, index, page = 1) {
         <span class="a-price"><span class="a-offscreen">$${(2 + i).toFixed(2)}</span></span>
         <span>($0.${i + 1}0/Ounce)</span>
         ${
-          // The last one is sold by weight: no Add button in search results.
-          (byAsin ? query.endsWith("4") : i === 4)
+          // The last one isn't really available: Amazon never takes it, and
+          // looking it up again finds no Add button.
+          byAsin && query.endsWith("4")
             ? ""
-            : `<form method="post" action="/cart/add-to-cart/ref=sm">
+            : `<form method="post" action="/cart/add-to-cart/local-market/QW1hem9uIEZyZXNo/ref=sm">
           <input type="hidden" name="anti-csrftoken-a2z" value="tok-${asin}">
           <input type="hidden" name="items[0.base][asin]" value="${asin}">
           <input type="hidden" name="items[0.base][quantity]" value="1">
@@ -89,7 +90,8 @@ await context.route("https://www.amazon.com/**", async (route) => {
     const body = new URLSearchParams(req.postData());
     const asin = body.get("items[0.base][asin]");
     seen.posts.push(req.postData());
-    if (body.has("submit.addToCart") && (seen.posts.length > 1 || dropped.has(asin))) cart.add(asin);
+    if (asin.endsWith("4")) dropped.add(asin);
+    else if (body.has("submit.addToCart") && (seen.posts.length > 1 || dropped.has(asin))) cart.add(asin);
     else dropped.add(asin);
     return route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
   }
@@ -168,7 +170,7 @@ await panel.getByRole("button", { name: "Remove" }).click();
 t.check("Remove takes it out of the cart", (await page.locator(".sm-cart-count").textContent()) === "0");
 await panel.getByText("Go to my Amazon Fresh cart").click();
 await page.waitForURL(/\/cart\/localmarket/, { timeout: 20000 }).catch(() => {});
-t.check("checkout posts each item to Amazon, with the Add button", seen.posts.length === 3 && seen.posts.every((b) => /anti-csrftoken-a2z=tok-/.test(b) && /submit\.addToCart=/.test(b)), seen.posts);
+t.check("checkout posts each item to Amazon, with the Add button", seen.posts.length === 4 && seen.posts.every((b) => /anti-csrftoken-a2z=tok-/.test(b) && /submit\.addToCart=/.test(b)), seen.posts);
 t.check("and posts again the one Amazon dropped, so both end up in the cart", cart.size === 2, [...cart]);
 t.check("and lands on the Fresh cart", /\/cart\/localmarket/.test(page.url()), page.url());
 

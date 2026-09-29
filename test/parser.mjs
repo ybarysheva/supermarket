@@ -34,7 +34,8 @@ const result = await page.evaluate(async ({ html, realHtml, barHtml }) => {
   window.fetch = async (url, opts) => {
     retried.push(`${opts && opts.method ? opts.method : "GET"} ${new URL(String(url)).pathname}`);
     if (opts && opts.method === "POST") return new Response("", { status: retried.length === 1 ? 403 : 200 });
-    return new Response(html);
+    // The store's search page (its Add buttons post to the store's cart).
+    return new Response(html.replaceAll("/cart/add-to-cart/ref=fresh_atc", "/cart/add-to-cart/local-market/QW1hem9uIEZyZXNo/ref=fresh_atc"));
   };
   const stale = { ...products[0], addForm: { ...products[0].addForm, fields: [["anti-csrftoken-a2z", "old"]] } };
   const refreshed = await fresh.addToCart(stale, 1);
@@ -76,6 +77,12 @@ const result = await page.evaluate(async ({ html, realHtml, barHtml }) => {
     dept("Wine", "w", ["w1", "Red Wine"]),
     dept("Office & School", "o"),
   ];
+  // Sizes learned from stocking: a small category gets a short shelf, a
+  // big one with many sub-categories a long one; unknown ones one bay.
+  // One with nothing from the store this week gets no shelf.
+  const sized = S.buildLayout(catalog, { s1: { n: 4, groups: 0 }, s2: { n: 200, groups: 10 }, s4: { n: 0, groups: 0, at: Date.now() } });
+  const sizedShelf = (name) => sized.places.flatMap((p) => p.sides.flatMap((sd) => sd.sections)).find((x) => x.name === name);
+  const learned = [sizedShelf("Pantry 1").bays, sizedShelf("Pantry 2").bays, sizedShelf("Pantry 3").bays, sizedShelf("Pantry 4") ? "shown" : "hidden"];
   const L = S.buildLayout(catalog);
   S.useLayout(L);
   const shelves = L.places.flatMap((p) => p.sides.flatMap((sd) => sd.sections.map((x) => ({ place: p.id, fixture: sd.fixture, ...x }))));
@@ -101,6 +108,7 @@ const result = await page.evaluate(async ({ html, realHtml, barHtml }) => {
     order: L.places.map((p) => p.id),
     cereal: found("cereal"),
     peanut: found("peanut butter"),
+    learned,
   };
   const bar = (t, next) => `<div data-component-type="s-result-info-bar"><h1><span>${t}</span></h1></div>${next}`;
   const page1 = S.adapters._parseAmazonPage(bar("1-24 of over 1,000 results for", '<a class="s-pagination-next" href="?page=2">Next</a>'), "https://www.amazon.com");
@@ -123,7 +131,9 @@ const result = await page.evaluate(async ({ html, realHtml, barHtml }) => {
   // (the current category in bold, its sub-categories indented below).
   const li = (node, indent, name, link) => `<li id="n/${node}" class="a-spacing-micro s-navigation-indent-${indent}"><span class="a-list-item">${link ? `<a class="a-link-normal s-navigation-item" href="/s?rh=n%3A${node}"><span class="a-size-base a-color-base">${name}</span></a>` : `<span class="a-size-base a-color-base a-text-bold">${name}</span>`}</span></li>`;
   const deptHtml = `<div id="departments"><ul id="filter-n"><li id="n"><a href="/s"><span class="a-size-base a-color-base">Any Department</span></a></li>${li("10329849011", 1, "Amazon Fresh", true)}${li("6506977011", 2, "Produce", true)}${li("16319281", 3, "Fresh Vegetables", false)}<ul>${li("111", 4, "Onions & Leeks", true)}${li("112", 4, "Peppers", true)}</ul></ul></div>`;
-  const kids = S.adapters._parseAmazonPage(deptHtml, "https://www.amazon.com").children;
+  const kidsPage = S.adapters._parseAmazonPage(deptHtml, "https://www.amazon.com");
+  const kids = kidsPage.children;
+  const kidsHere = kidsPage.here;
   // Without a bold current category the list is about something else.
   const noBold = S.adapters._parseAmazonPage(`<div id="departments"><ul>${li("1", 1, "Amazon Fresh", true)}${li("2", 2, "Kitchen & Dining", true)}</ul></div>`, "https://www.amazon.com").children;
   // A product from Amazon's regular cart on a store page isn't the store's.
@@ -131,7 +141,7 @@ const result = await page.evaluate(async ({ html, realHtml, barHtml }) => {
   const mixed = S.adapters._parseAmazonPage(form("B0FRESH001", "/cart/add-to-cart/local-market/QW1hem9uIEZyZXNo/") + form("B0NOPRICE1", "/cart/add-to-cart/local-market/QW1hem9uIEZyZXNo/", "") + form("B0SPOON001", "/cart/add-to-cart/ref=dp") + '<div data-component-type="s-search-result" data-asin="B0CELERI01"><h2>Celeriac, 2 lb</h2></div>', "https://www.amazon.com").products.map((p) => p.id);
 
   // A category shelf shows everything in its category.
-  const card = '<div data-component-type="s-search-result" data-asin="B0NUTBUT01"><h2>Almond Butter</h2></div>';
+  const card = '<div data-component-type="s-search-result" data-asin="B0NUTBUT01"><h2>Almond Butter</h2><span class="a-price"><span class="a-offscreen">$7.99</span></span><form action="/cart/add-to-cart/local-market/QW1hem9uIEZyZXNo/"><input name="items[0.base][asin]" value="B0NUTBUT01"></form></div>';
   const asked = [];
   window.fetch = async (url) => {
     const u = new URL(url);
@@ -140,7 +150,7 @@ const result = await page.evaluate(async ({ html, realHtml, barHtml }) => {
   };
   const browsed = await S.adapters.fresh().searchShelf(shelf("Nut & Seed Butters"));
   const fallback = { names: browsed.products.map((p) => p.name), asked };
-  return { noBold, mixed, kids, brands, fallback, paging, products, captcha, sent, added, noForm, cartUrl: fresh.cartUrl(), retried, refreshed, signedOut, evil, realProducts, departments, subs, layout };
+  return { kidsHere, noBold, mixed, kids, brands, fallback, paging, products, captcha, sent, added, noForm, cartUrl: fresh.cartUrl(), retried, refreshed, signedOut, evil, realProducts, departments, subs, layout };
 }, { html: fixture, realHtml: real, barHtml: bar });
 await browser.close();
 
@@ -158,7 +168,7 @@ const checks = [
   ["sends the chosen quantity", result.sent[0].body.includes(encodeURIComponent("items[0.base][quantity]") + "=3")],
   ["falls back when there's no add form", !result.noForm.ok],
   ["links to the Fresh cart", result.cartUrl.includes("almBrandId=QW1hem9uIEZyZXNo")],
-  ["retries an expired add form with a fresh one", result.refreshed.ok && result.retried.join(",") === "POST /cart/add-to-cart/ref=fresh_atc,GET /s,POST /cart/add-to-cart/ref=fresh_atc"],
+  ["retries an expired add form with a fresh one", result.refreshed.ok && result.retried.join(",") === "POST /cart/add-to-cart/ref=fresh_atc,GET /s,POST /cart/add-to-cart/local-market/QW1hem9uIEZyZXNo/ref=fresh_atc"],
   ["says so when you're signed out", /signed out/.test(result.signedOut || "")],
   ["reads how many results there are in all", result.paging.page1.total === 1000 && result.paging.pageLast.total === 119],
   ["a category shelf shows everything in its category", result.fallback.names.join() === "Almond Butter" && result.fallback.asked.join() === "|n:s0", result.fallback],
@@ -166,6 +176,7 @@ const checks = [
   ["brands: guessed from the name when there's no list", result.brands.guessed.join("|") === "Barilla|De Cecco|365", result.brands.guessed],
   ["brands: kept together, the store brand beside the best seller, one-offs last", result.brands.order.join() === "1,4,5,7,3,6,2", result.brands.order],
   ["sub-categories: read from the sidebar, below the current category", JSON.stringify(result.kids) === JSON.stringify([{ node: "111", name: "Onions & Leeks" }, { node: "112", name: "Peppers" }]), result.kids],
+  ["sub-categories: says which category the list is about", result.kidsHere === "16319281", result.kidsHere],
   ["sub-categories: none unless the current category is shown", result.noBold.length === 0, result.noBold],
   ["leaves off products the store doesn't sell (other carts, no Add button, no price)", result.mixed.join() === "B0FRESH001", result.mixed],
   ["knows when there's another page", result.paging.page1.more && !result.paging.pageLast.more && result.paging.noNav.more],
@@ -182,7 +193,8 @@ checks.push(
   ["store: a department with no subcategories is a shelf itself", m.office.name === "Office & School" && m.office.category.node === "o"],
   ["store: produce on tables, herbs on the misted rack", m.fruit === "table" && m.herbs === "wetrack", m],
   ["store: freezers, ice cream chests, dairy coolers, seafood counter", m.pizza === "freezer" && m.icecream === "coffin" && m.milk === "cooler" && m.fish === "counter", m],
-  ["store: center aisle sides hold up to 8 shelves", m.widest <= 8, m.widest],
+  ["store: center aisle sides hold up to 6 shelves", m.widest <= 6, m.widest],
+  ["store: shelves sized by what the category carried last time", m.learned.join() === "0.5,3,1,hidden", m.learned],
   ["store: produce first, cold things last", m.order[0] === "produce" && m.order[m.order.length - 1] === "dairy", m.order],
   ["store: asking finds category shelves", m.cereal === "Cereals" && m.peanut === "Nut & Seed Butters", m]
 );

@@ -31,26 +31,33 @@
 
   const CACHE_MINUTES = 30;
   const MAX_PER_SECTION = 60; // a whole results page
-  const MAX_GROUPS = 12; // sub-category sections on one shelf
+  const MAX_GROUPS = 16; // sub-category sections read for one shelf
+
+  // Results are kept in memory while the store is open, not in the page's
+  // sessionStorage: Amazon's own scripts need that space (a full store's
+  // pages filled its 5 MB and Amazon's page started failing).
+  const MAX_CACHED = 400;
+  const cache = new Map();
+  try {
+    // Free what earlier versions put there.
+    for (let i = sessionStorage.length - 1; i >= 0; i--) {
+      const k = sessionStorage.key(i);
+      if (/^supermarket:(fresh|wholefoods):/.test(k)) sessionStorage.removeItem(k);
+    }
+  } catch {
+    /* blocked: nothing to free */
+  }
 
   function cacheGet(key) {
-    try {
-      const raw = sessionStorage.getItem(key);
-      if (!raw) return null;
-      const { at, data } = JSON.parse(raw);
-      if (Date.now() - at > CACHE_MINUTES * 60 * 1000) return null;
-      return data;
-    } catch {
-      return null;
-    }
+    const hit = cache.get(key);
+    if (!hit || Date.now() - hit.at > CACHE_MINUTES * 60 * 1000) return null;
+    return hit.data;
   }
 
   function cacheSet(key, data) {
-    try {
-      sessionStorage.setItem(key, JSON.stringify({ at: Date.now(), data }));
-    } catch {
-      /* storage full or blocked — fine, just don't cache */
-    }
+    cache.delete(key);
+    cache.set(key, { at: Date.now(), data });
+    if (cache.size > MAX_CACHED) cache.delete(cache.keys().next().value); // the oldest
   }
 
   // Amazon throttles bursts of searches with a captcha, so walk the aisle
@@ -206,7 +213,10 @@
     const total = totalOf(doc);
     const next = doc.querySelector(".s-pagination-next");
     const more = next ? !next.matches(".s-pagination-disabled, [aria-disabled='true']") : total != null && total > cardsBefore(doc, cards.length);
-    return { products, total, more, children };
+    // Which category the list is about (the bold one), so a caller can tell
+    // whether `children` are really its own sub-categories.
+    const here_node = current >= 0 ? nav[current].id.slice(2) : null;
+    return { products, total, more, children, here: here_node };
   }
 
   // How many results come before the end of this page ("25-48 of 119" → 48).
@@ -349,7 +359,12 @@
       if (node) url.searchParams.set("rh", `n:${node}`);
       if (best) url.searchParams.set("s", "exact-aware-popularity-rank");
       if (page > 1) url.searchParams.set("page", String(page));
-      return parsePage(await fetchPage(url.href), origin);
+      const r = parsePage(await fetchPage(url.href), origin);
+      // A page with nothing you can add to the store's cart (Office &
+      // School's "Presentation Supplies" is all regular Amazon) has
+      // nothing from this store on it.
+      if (!r.products.some((p) => p.addForm && /\/local-market\//.test(p.addForm.action))) r.products = [];
+      return r;
     }
 
     // One page of a search, as { products, total, next }: `next` is where
@@ -361,7 +376,7 @@
         r = await fetchResults(query, node, page, best);
         cacheSet(key, r);
       }
-      return { products: r.products, total: r.total ?? null, children: r.children || [], next: r.more ? { node: node || null, page: page + 1, best } : null };
+      return { products: r.products, total: r.total ?? null, children: r.children || [], here: r.here || null, next: r.more ? { node: node || null, page: page + 1, best } : null };
     }
 
     async function postForm(form, qty) {
@@ -406,14 +421,17 @@
           const g = cursor.groups[cursor.i];
           const c = await cachedResults("", g.node, 1, true);
           const next = cursor.i + 1 < cursor.groups.length ? { ...cursor, i: cursor.i + 1 } : null;
-          return { products: c.products.map((p) => ({ ...p, group: g.name })), total: null, next };
+          return { products: c.products.map((p, i) => ({ ...p, group: g.name, groupRank: i })), total: null, next };
         }
         if (cursor) return cachedResults(cursor.query ?? section.query, cursor.node, cursor.page, !!cursor.best);
         const cat = section.category;
         // A category shelf carries its best sellers; a display of
         // "everything matching…" keeps Amazon's relevance order.
         const r = await cachedResults(section.query, cat && cat.node, 1, !!cat);
-        if (cat && r.children.length >= 2) return { ...r, next: { groups: r.children.slice(0, MAX_GROUPS), i: 0 } };
+        // Only when the sidebar is about this category: on some pages it's
+        // about all of Amazon Fresh, and its "sub-categories" are whole
+        // departments (Frozen, Pantry Staples… under Fruit Snacks).
+        if (cat && r.here === String(cat.node) && r.children.length >= 2) return { ...r, next: { groups: r.children.slice(0, MAX_GROUPS), i: 0 } };
         if (r.products.length || !cat) return r;
         // Amazon lists nothing when some categories are browsed directly;
         // search for the category's name instead, within its department,

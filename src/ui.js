@@ -64,6 +64,20 @@
     return words.every((w) => name.includes(w) || (w.length > 3 && w.endsWith("s") && name.includes(w.slice(0, -1))));
   }
 
+  // Amazon files a product under several sub-categories (Cheez-It under
+  // "Assortments & Samplers" and "Deli" as well as its own). The one whose
+  // name the product's name echoes wins ("Honey Maid Graham Crackers" →
+  // Graham Crackers); otherwise the one where it ranks highest.
+  const groupWords = (g) => g.toLowerCase().split(/[^a-z]+/).filter((w) => w.length > 3).map((w) => w.replace(/(ies)$/, "y").replace(/s$/, ""));
+  const echoes = (g, name) => groupWords(g).some((w) => name.toLowerCase().includes(w));
+  function betterGroup(p, old) {
+    if (!old.group) return true;
+    const a = echoes(p.group, p.name);
+    const b = echoes(old.group, p.name);
+    if (a !== b) return a;
+    return (p.groupRank ?? 99) < (old.groupRank ?? 99);
+  }
+
   class Store {
     constructor(opts) {
       this.opts = opts;
@@ -165,7 +179,7 @@
         return;
       }
       this.setupError = null;
-      S.useLayout(S.buildLayout(catalog));
+      S.useLayout(S.buildLayout(catalog, load(`supermarket:sizes:${id}`, {})));
       this.ready = true;
       // With 3D available you start at the entrance, looking into the store.
       this.view = this.use3d ? "walk" : "map";
@@ -266,7 +280,13 @@
       if (!s || s.status === "error") {
         s = { status: "loading", products: [], total: null, next: null };
         s.promise = this.schedule(() => this.askShelf(section, place)).then(
-          (r) => Object.assign(s, { status: "ready" }, r),
+          (r) => {
+            Object.assign(s, { status: "ready" }, r);
+            // The category's own best sellers, in order: they say which of
+            // its sub-category sections matter most.
+            s.products.forEach((p, i) => (p.rank = i));
+            this.learnSize(section, s);
+          },
           (error) => Object.assign(s, { status: "error", error })
         );
         this.shelves.set(key, s);
@@ -297,12 +317,14 @@
               let grouped = false;
               for (const p of r.products) {
                 const old = have.get(p.id);
-                if (old && p.group && !old.group) {
+                if (old && p.group && betterGroup(p, old)) {
                   old.group = p.group;
+                  old.groupRank = p.groupRank;
                   grouped = true;
                 }
               }
               if (added.length || grouped) s.products = [...s.products, ...added];
+              this.learnSize(section, s);
               s.total = r.total ?? s.total;
               // A page of repeats means that's all, unless it's one of the
               // shelf's sub-category sections.
@@ -318,6 +340,19 @@
           });
       }
       return s.morePromise;
+    }
+
+    // Remember how much a category turned out to carry, so the next time
+    // the store is built its shelf is the right size (layout.js).
+    learnSize(section, s) {
+      const node = section.category && section.category.node;
+      if (!node || !this.adapter) return;
+      const key = `supermarket:sizes:${this.adapter.id}`;
+      const sizes = load(key, {});
+      const groups = Math.max(new Set(s.products.map((p) => p.group).filter(Boolean)).size, (s.next && s.next.groups && s.next.groups.length) || 0);
+      const old = sizes[node] || {};
+      sizes[node] = { n: Math.max(old.n || 0, s.products.length), groups: Math.max(old.groups || 0, groups), at: Date.now() };
+      save(key, sizes);
     }
 
     shelfState(section) {

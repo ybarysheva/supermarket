@@ -14,7 +14,7 @@
   const W_WIDE = 3.0; // produce lanes are roomier
   const SPINE = 0.06; // between two fixtures standing back to back
   const Z0 = 8; // where the aisles start, measured from the front wall
-  const L = 18; // aisle length
+  const L = 24; // aisle length
   const STEP = 1.5; // distance between standing spots inside an aisle
   const EYE = 1.6;
   const CEILING = 4.8;
@@ -24,7 +24,7 @@
   const UNSTOCK_RADIUS = 24; // …and empty them again past this one, to save memory
   const MAX_STOCKING = 2; // shelf requests queued at once (the store lets two out at a time)
   const SLOT = 0.2; // shelf space per product, as in a real store
-  const MAX_BAY = 4.8; // longest stretch of fixture one category gets
+  const MAX_BAY = 3.2; // longest stretch of fixture per bay of a category
 
   // Where each product goes on a bay: `perRow` slots on each of `R` rows
   // (eye level first). Like a real store, the shelf carries the category's
@@ -43,7 +43,12 @@
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(p);
     }
-    const list = [...groups.keys()].sort((a, b) => (a === "") - (b === "")).map((name) => ({ name, items: groups.get(name) }));
+    // Sections holding more of the category's best sellers come first (and
+    // get the room when the shelf is short); the rest go last.
+    const top = (name) => groups.get(name).filter((p) => p.rank != null).length;
+    const list = [...groups.keys()]
+      .sort((a, b) => (a === "") - (b === "") || top(b) - top(a) || groups.get(b).length - groups.get(a).length)
+      .map((name) => ({ name, items: groups.get(name) }));
     const spots = [];
     const labels = [];
     const order = (items) => (crates ? items : S.byBrand(items));
@@ -56,13 +61,14 @@
     // Columns for each section: what it needs, up to a fair share so no
     // one section (Avocados) takes over the display; one each first when
     // the shelf is short. Spare columns stay empty, with room for more.
-    // Every section is at least two columns wide (its sign readable); a
-    // short shelf carries fewer sections.
-    const fair = Math.max(2, Math.ceil((perRow * 2) / list.length));
-    const need = list.map((g) => Math.max(2, Math.min(fair, Math.ceil(g.items.length / R))));
+    // Every section is at least MIN wide (60 cm of shelf, two crates) so it
+    // reads as a section with its sign; a short shelf carries fewer.
+    const MIN = crates ? 2 : 3;
+    const fair = Math.max(MIN, Math.ceil((perRow * 2) / list.length));
+    const need = list.map((g) => Math.max(MIN, Math.min(fair, Math.ceil(g.items.length / R))));
     const got = list.map(() => 0);
     let left = perRow;
-    for (let i = 0; i < list.length && left >= 2; i++, left -= 2) got[i] = 2;
+    for (let i = 0; i < list.length && left >= MIN; i++, left -= MIN) got[i] = MIN;
     while (left > 0) {
       let best = -1;
       for (let i = 0; i < list.length; i++) if (got[i] && got[i] < need[i] && (best < 0 || need[i] - got[i] > need[best] - got[best])) best = i;
@@ -898,6 +904,9 @@
 
     loadMore(bay) {
       return this.store.more(bay.section, bay.place).then((s) => {
+        // Sub-category sections go up once they've all arrived, not
+        // rearranging the shelf as each one comes in.
+        if (s && s.next && s.next.groups) return s;
         if (!this.destroyed && s && s.products !== bay.shownFrom) this.refill(bay);
         return s;
       });
@@ -1741,7 +1750,9 @@
         };
         if (Math.abs(look.z) > 0.6) {
           const [l, r] = look.z > 0 ? ["left", "right"] : ["right", "left"];
-          sides = [`◀ ${bayAt(l).section.name}`, `${bayAt(r).section.name} ▶`];
+          // A side can be a bare wall, with no shelves.
+          const [bl, br] = [bayAt(l), bayAt(r)];
+          sides = [bl && `◀ ${bl.section.name}`, br && `${br.section.name} ▶`].filter(Boolean);
         }
       } else if (n.zone === "back") title = ["Back of the store", ...new Set(S.LAYOUT.plan.back.map(([id]) => S.place(id).label))].join(" · ");
       else if (n.zone === "front") title = "Front of the store";
