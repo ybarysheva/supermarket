@@ -119,6 +119,12 @@ const result = await page.evaluate(async ({ html, realHtml, barHtml }) => {
   ]).map((p) => p.id);
   const brands = { branded, guessed, order };
 
+  // Sub-categories: the sidebar's Department list, shaped like Amazon's
+  // (the current category in bold, its sub-categories indented below).
+  const li = (node, indent, name, link) => `<li id="n/${node}" class="a-spacing-micro s-navigation-indent-${indent}"><span class="a-list-item">${link ? `<a class="a-link-normal s-navigation-item" href="/s?rh=n%3A${node}"><span class="a-size-base a-color-base">${name}</span></a>` : `<span class="a-size-base a-color-base a-text-bold">${name}</span>`}</span></li>`;
+  const deptHtml = `<div id="departments"><ul id="filter-n"><li id="n"><a href="/s"><span class="a-size-base a-color-base">Any Department</span></a></li>${li("10329849011", 1, "Amazon Fresh", true)}${li("6506977011", 2, "Produce", true)}${li("16319281", 3, "Fresh Vegetables", false)}<ul>${li("111", 4, "Onions & Leeks", true)}${li("112", 4, "Peppers", true)}</ul></ul></div>`;
+  const kids = S.adapters._parseAmazonPage(deptHtml, "https://www.amazon.com").children;
+
   // A category shelf shows everything in its category.
   const card = '<div data-component-type="s-search-result" data-asin="B0NUTBUT01"><h2>Almond Butter</h2></div>';
   const asked = [];
@@ -129,7 +135,7 @@ const result = await page.evaluate(async ({ html, realHtml, barHtml }) => {
   };
   const browsed = await S.adapters.fresh().searchShelf(shelf("Nut & Seed Butters"));
   const fallback = { names: browsed.products.map((p) => p.name), asked };
-  return { brands, fallback, paging, products, captcha, sent, added, noForm, cartUrl: fresh.cartUrl(), retried, refreshed, signedOut, evil, realProducts, departments, subs, layout };
+  return { kids, brands, fallback, paging, products, captcha, sent, added, noForm, cartUrl: fresh.cartUrl(), retried, refreshed, signedOut, evil, realProducts, departments, subs, layout };
 }, { html: fixture, realHtml: real, barHtml: bar });
 await browser.close();
 
@@ -154,6 +160,7 @@ const checks = [
   ["brands: read from the sidebar's brand list", result.brands.branded.join("|") === "Justin's Nut Butter|365 by Whole Foods Market|Barney Butter", result.brands.branded],
   ["brands: guessed from the name when there's no list", result.brands.guessed.join("|") === "Barilla|De Cecco|365", result.brands.guessed],
   ["brands: kept together, the store brand beside the best seller, one-offs last", result.brands.order.join() === "1,4,5,7,3,6,2", result.brands.order],
+  ["sub-categories: read from the sidebar, below the current category", JSON.stringify(result.kids) === JSON.stringify([{ node: "111", name: "Onions & Leeks" }, { node: "112", name: "Peppers" }]), result.kids],
   ["knows when there's another page", result.paging.page1.more && !result.paging.pageLast.more && result.paging.noNav.more],
   ["drops javascript: links", result.evil.url === "https://www.amazon.com/dp/B0EVIL" && result.evil.image === null],
 ];

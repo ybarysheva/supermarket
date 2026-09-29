@@ -90,6 +90,24 @@ const blocks = await store(p, (s) => {
 t.check("each brand stands together in one block", blocks.big.every((b) => blocks.runs.filter((r) => r === b).length === 1) && blocks.big.length > 1, blocks);
 t.check("a brand's best seller is at eye level", blocks.firstAtEye);
 
+// A category with sub-categories is stocked in sections, one per
+// sub-category, each with its sign, in the store's order.
+await p.evaluate(() => window.Supermarket.current().ask("pasta"));
+await arrived(p);
+const sections = await until(() =>
+  store(p, (s) => {
+    const bay = s.walker.bays.find((b) => b.section.name === "Pasta");
+    if (s.shelfState(bay.section)?.next) return null;
+    const order = [];
+    for (const it of bay.items) if (order[order.length - 1] !== (it.p.group || "")) order.push(it.p.group || "");
+    return { order, labels: bay.stocked.children.filter((c) => c.geometry && c.geometry.parameters && c.position.y > 1.9 && c.position.y < 2.2).length };
+  })
+);
+t.check("sub-categories get their own sections, in order", sections && sections.order.join() === "Spaghetti,Penne,Egg Noodles,Gluten-Free,", sections);
+t.check("each section has a sign", sections && sections.labels === 4, sections);
+await p.evaluate(() => window.Supermarket.current().ask("peanut butter"));
+await arrived(p);
+
 // Keyboard: plain keys walk, browser shortcuts are left alone.
 const prevented = (init) =>
   p.evaluate((init) => {

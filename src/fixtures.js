@@ -74,8 +74,10 @@
       depth: 0.9,
       height: 2.15,
       cold: true,
-      rows: coolerRows.map((y) => ({ y, z: 0.62, maxH: 0.29, lean: 0, kind: "box", tag: { y: y - 0.045, z: 0.77, lean: 0 } })),
-      sign: { y: 2.3, z: 0.45 },
+      // Tags just in front of the shelf boards' edges; the sign on the
+      // canopy's face, where it's seen from the aisle below.
+      rows: coolerRows.map((y) => ({ y, z: 0.62, maxH: 0.29, lean: 0, kind: "box", tag: { y: y - 0.045, z: 0.805, lean: 0 } })),
+      sign: { y: 2.05, z: 0.915 },
       build(api, g, w, unit) {
         coolerBody(api, g, w, unit, this, coolerRows);
       },
@@ -86,8 +88,8 @@
       depth: 0.9,
       height: 2.15,
       cold: true,
-      rows: coolerRows.map((y) => ({ y, z: 0.58, maxH: 0.29, lean: 0, kind: "box", tag: { y: y - 0.045, z: 0.77, lean: 0 } })),
-      sign: { y: 2.3, z: 0.45 },
+      rows: coolerRows.map((y) => ({ y, z: 0.58, maxH: 0.29, lean: 0, kind: "box", tag: { y: y - 0.045, z: 0.805, lean: 0 } })),
+      sign: { y: 2.05, z: 0.915 },
       build(api, g, w, unit) {
         coolerBody(api, g, w, unit, this, coolerRows);
         const doors = Math.max(1, Math.round(w / 0.76));
