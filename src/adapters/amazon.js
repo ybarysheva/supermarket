@@ -175,10 +175,11 @@
     // On a store page (its Add buttons post to the store's cart), only
     // products you can add to the store's cart are the store's: others
     // (Amazon's regular cart, or no Add button) are outside sellers, like a
-    // $50 celeriac or a dinner spoon. Leave them off the shelf.
+    // $50 celeriac or a dinner spoon. Leave them off the shelf, and
+    // anything without a price ("See price": currently unavailable).
     const fresh = (p) => p.addForm && /\/local-market\//.test(p.addForm.action);
     if (products.some(fresh)) {
-      for (let i = products.length - 1; i >= 0; i--) if (!fresh(products[i])) products.splice(i, 1);
+      for (let i = products.length - 1; i >= 0; i--) if (!fresh(products[i]) || products[i].price == null) products.splice(i, 1);
     }
 
     // The category's brands, from the sidebar's Brands filter.

@@ -127,8 +127,8 @@ const result = await page.evaluate(async ({ html, realHtml, barHtml }) => {
   // Without a bold current category the list is about something else.
   const noBold = S.adapters._parseAmazonPage(`<div id="departments"><ul>${li("1", 1, "Amazon Fresh", true)}${li("2", 2, "Kitchen & Dining", true)}</ul></div>`, "https://www.amazon.com").children;
   // A product from Amazon's regular cart on a store page isn't the store's.
-  const form = (asin, action) => `<div data-component-type="s-search-result" data-asin="${asin}"><h2>${asin}</h2><form action="${action}"><input name="items[0.base][asin]" value="${asin}"></form></div>`;
-  const mixed = S.adapters._parseAmazonPage(form("B0FRESH001", "/cart/add-to-cart/local-market/QW1hem9uIEZyZXNo/") + form("B0SPOON001", "/cart/add-to-cart/ref=dp") + '<div data-component-type="s-search-result" data-asin="B0CELERI01"><h2>Celeriac, 2 lb</h2></div>', "https://www.amazon.com").products.map((p) => p.id);
+  const form = (asin, action, price = "$1.99") => `<div data-component-type="s-search-result" data-asin="${asin}"><h2>${asin}</h2>${price ? `<span class="a-price"><span class="a-offscreen">${price}</span></span>` : ""}<form action="${action}"><input name="items[0.base][asin]" value="${asin}"></form></div>`;
+  const mixed = S.adapters._parseAmazonPage(form("B0FRESH001", "/cart/add-to-cart/local-market/QW1hem9uIEZyZXNo/") + form("B0NOPRICE1", "/cart/add-to-cart/local-market/QW1hem9uIEZyZXNo/", "") + form("B0SPOON001", "/cart/add-to-cart/ref=dp") + '<div data-component-type="s-search-result" data-asin="B0CELERI01"><h2>Celeriac, 2 lb</h2></div>', "https://www.amazon.com").products.map((p) => p.id);
 
   // A category shelf shows everything in its category.
   const card = '<div data-component-type="s-search-result" data-asin="B0NUTBUT01"><h2>Almond Butter</h2></div>';
@@ -167,7 +167,7 @@ const checks = [
   ["brands: kept together, the store brand beside the best seller, one-offs last", result.brands.order.join() === "1,4,5,7,3,6,2", result.brands.order],
   ["sub-categories: read from the sidebar, below the current category", JSON.stringify(result.kids) === JSON.stringify([{ node: "111", name: "Onions & Leeks" }, { node: "112", name: "Peppers" }]), result.kids],
   ["sub-categories: none unless the current category is shown", result.noBold.length === 0, result.noBold],
-  ["leaves off products the store doesn't sell (other carts, no Add button)", result.mixed.join() === "B0FRESH001", result.mixed],
+  ["leaves off products the store doesn't sell (other carts, no Add button, no price)", result.mixed.join() === "B0FRESH001", result.mixed],
   ["knows when there's another page", result.paging.page1.more && !result.paging.pageLast.more && result.paging.noNav.more],
   ["drops javascript: links", result.evil.url === "https://www.amazon.com/dp/B0EVIL" && result.evil.image === null],
 ];
