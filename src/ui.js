@@ -179,7 +179,7 @@
         return;
       }
       this.setupError = null;
-      S.useLayout(S.buildLayout(catalog, load(`supermarket:sizes:${id}`, {})));
+      S.useLayout(S.buildLayout(catalog, load(`supermarket:sizes2:${id}`, {})));
       this.ready = true;
       // With 3D available you start at the entrance, looking into the store.
       this.view = this.use3d ? "walk" : "map";
@@ -242,7 +242,7 @@
       phrase = phrase.trim();
       if (!phrase) return;
       this.lastAsk = phrase;
-      const hit = S.findShelf(phrase)[0];
+      const hit = this.whereIs(phrase);
       if (hit) {
         const side = hit.place.sides[hit.sideIndex];
         const sec = side.sections[hit.sectionIndex];
@@ -252,6 +252,35 @@
       } else {
         this.searchWholeStore(phrase);
       }
+    }
+
+    // The shelf for a phrase, or null: one whose name accounts for every
+    // word ("gummy bears" isn't Vitamins & Gummies) or is the phrase; else
+    // the shelf with the most products (already on it) matching every word.
+    whereIs(phrase) {
+      const q = phrase.toLowerCase();
+      const words = q.split(/[^a-z0-9]+/).filter((w) => w.length > 2);
+      const stem = (w) => w.replace(/(ies)$/, "y").replace(/(es|s)$/, "");
+      const inName = (name) => words.every((w) => name.toLowerCase().includes(stem(w)));
+      let best = null;
+      let most = 0;
+      S.allPlaces().forEach((place) =>
+        place.sides.forEach((side, sideIndex) =>
+          side.sections.forEach((sec, sectionIndex) => {
+            const st = this.shelves.get(shelfKey(sec));
+            const n = st && st.products ? st.products.filter((p) => inName(p.name)).length : 0;
+            if (n > most) {
+              most = n;
+              best = { place, sideIndex, sectionIndex };
+            }
+          })
+        )
+      );
+      const covered = (sec) => {
+        const keys = [sec.name.toLowerCase(), ...sec.keywords];
+        return words.every((w) => keys.some((k) => k.split(/[^a-z0-9]+/).some((kw) => kw && (kw.startsWith(stem(w)) || (kw.length >= 3 && stem(w).includes(kw))))));
+      };
+      return S.findShelf(phrase).find((h) => h.score >= 200 || covered(h.place.sides[h.sideIndex].sections[h.sectionIndex])) || best;
     }
 
     // When nothing on the floor plan fits, set up a display just for it.
@@ -347,7 +376,7 @@
     learnSize(section, s) {
       const node = section.category && section.category.node;
       if (!node || !this.adapter) return;
-      const key = `supermarket:sizes:${this.adapter.id}`;
+      const key = `supermarket:sizes2:${this.adapter.id}`;
       const sizes = load(key, {});
       const groups = Math.max(new Set(s.products.map((p) => p.group).filter(Boolean)).size, (s.next && s.next.groups && s.next.groups.length) || 0);
       const old = sizes[node] || {};

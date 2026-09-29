@@ -82,7 +82,7 @@ await context.route("https://www.amazon.com/**", async (route) => {
     const page = Number(u.searchParams.get("page") || 1);
     seen.searches.push({ k: u.searchParams.get("k"), i: u.searchParams.get("i"), rh: u.searchParams.get("rh"), page, sort: u.searchParams.get("s") });
     // Some categories list nothing when browsed directly.
-    if (!u.searchParams.get("k") && u.searchParams.get("rh") === "n:778") return route.fulfill(html("<html><body></body></html>"));
+    if (!u.searchParams.get("k") && /n:778$/.test(u.searchParams.get("rh") || "")) return route.fulfill(html("<html><body></body></html>"));
     // Browsing a category (no search words): name its products after it.
     return route.fulfill(html(resultsPage(u.searchParams.get("k") || u.searchParams.get("rh"), u.searchParams.get("i"), page)));
   }
@@ -145,11 +145,12 @@ t.check("product photos come through the extension's photo fetcher", await until
 // Ask for something, then use the flat view to click reliably.
 await page.locator(".sm-ask input").fill("peanut butter");
 await page.locator(".sm-ask button").click();
-const nutButters = (s) => s.rh === "n:777" && !s.k;
+// Within Amazon Fresh: its root, the department, the category.
+const nutButters = (s) => s.rh === "n:10329849011,n:18787303011,n:777" && !s.k;
 t.check("asking walks to the category's shelf, which shows that category", await until(() => seen.searches.some(nutButters)), seen.searches);
 t.check("category shelves come in best-seller order", seen.searches.filter(nutButters).every((s) => s.sort === "exact-aware-popularity-rank"), seen.searches.filter(nutButters));
 t.check("standing at the shelf, it fetches the category's next page", await until(() => seen.searches.some((s) => nutButters(s) && s.page === 2)), seen.searches.filter(nutButters));
-t.check("a category that lists nothing is searched for by name in its department", await until(() => seen.searches.some((s) => s.k === "Pasta Noodles" && s.rh === "n:18787303011")), seen.searches.filter((s) => /778|Pasta/.test(s.rh + s.k)));
+t.check("a category that lists nothing is searched for by name in its department", await until(() => seen.searches.some((s) => s.k === "Pasta Noodles" && s.rh === "n:10329849011,n:18787303011")), seen.searches.filter((s) => /778|Pasta/.test(s.rh + s.k)));
 t.check("each department page is read once", seen.departmentPages.filter((n) => n === "18787303011").length === 1, seen.departmentPages);
 await page.waitForTimeout(3000);
 await page.locator(".sm-w-tools button", { hasText: "Flat shelves" }).click();

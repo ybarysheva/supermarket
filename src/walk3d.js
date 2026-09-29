@@ -530,11 +530,7 @@
 
       // Fixtures along each corridor, front to back.
       const alongZ = (face, originX, theta, corridor, faceSide) => {
-        if (!face.entries.length) {
-          // A bare wall between two corridors' shelving.
-          A.block(this.scene, C.endcap, 0.1, 2.0, L, originX - (faceSide === "left" ? 0.05 : -0.05), 1.0, Z0 + L / 2, true);
-          return;
-        }
+        if (!face.entries.length) return; // nothing on this side
         // A section is at most MAX_BAY long; a short run leaves the rest of
         // the aisle open rather than stretching a category down all of it.
         const total = face.entries.reduce((t, e) => t + e.bays, 0);
@@ -868,21 +864,19 @@
       }
       wanted.sort((a, b) => a[0] - b[0]);
 
-      // Standing at a shelf with room for more: its next page goes first,
-      // then the shelves around you.
-      if (!this.move && busy < MAX_STOCKING) {
-        const bay = this.bayInView();
-        if (bay && this.wantsMore(bay)) {
-          this.loadMore(bay);
-          busy++;
-        }
-      }
       for (const [, b] of wanted) {
         if (this.isShelfReady(b)) this.stock(b);
         else if (busy < MAX_STOCKING) {
           this.stock(b);
           busy++;
         } else if (b.state === "empty") this.queue(b);
+      }
+
+      // Standing at a shelf with room for more: its next page (or its next
+      // sub-category section) once the shelves around you have theirs.
+      if (!this.move && busy < MAX_STOCKING) {
+        const bay = this.bayInView();
+        if (bay && this.wantsMore(bay)) this.loadMore(bay);
       }
     }
 
@@ -1214,7 +1208,9 @@
       }
       const url = shelfPhoto(p.image);
       bay.imageUrls.push(url);
-      acquireTexture(url).then(
+      // If the small photo isn't there, the original.
+      const load = () => acquireTexture(url).catch(() => (url === p.image ? Promise.reject() : (bay.imageUrls.push(p.image), acquireTexture(p.image))));
+      load().then(
         ({ texture, aspect }) => {
           if (bay.token !== token) return;
           texture.userData.shared = true; // owned by the cache, not the material
@@ -1845,18 +1841,25 @@
         if (!this.running) return;
         const dt = Math.min(0.25, (t - last) / 1000);
         last = t;
-        this.update(dt);
-        stockClock -= dt;
-        if (stockClock <= 0) {
-          stockClock = 0.35;
-          this.stockNearby();
-        }
-        if (this.dirty) {
-          this.dirty = false;
-          this.renderer.render(this.scene, this.camera);
-          this.drawMinimap();
-        }
+        // Scheduled first: an error in one frame mustn't stop the store
+        // (no more drawing, no more stocking).
         this.raf = requestAnimationFrame(loop);
+        try {
+          this.update(dt);
+          stockClock -= dt;
+          if (stockClock <= 0) {
+            stockClock = 0.35;
+            this.stockNearby();
+          }
+          if (this.dirty) {
+            this.dirty = false;
+            this.renderer.render(this.scene, this.camera);
+            this.drawMinimap();
+          }
+        } catch (e) {
+          if (!this.loggedError) console.error("Supermarket Mode:", e);
+          this.loggedError = true;
+        }
       };
       this.raf = requestAnimationFrame(loop);
     }
