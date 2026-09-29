@@ -124,6 +124,11 @@ const result = await page.evaluate(async ({ html, realHtml, barHtml }) => {
   const li = (node, indent, name, link) => `<li id="n/${node}" class="a-spacing-micro s-navigation-indent-${indent}"><span class="a-list-item">${link ? `<a class="a-link-normal s-navigation-item" href="/s?rh=n%3A${node}"><span class="a-size-base a-color-base">${name}</span></a>` : `<span class="a-size-base a-color-base a-text-bold">${name}</span>`}</span></li>`;
   const deptHtml = `<div id="departments"><ul id="filter-n"><li id="n"><a href="/s"><span class="a-size-base a-color-base">Any Department</span></a></li>${li("10329849011", 1, "Amazon Fresh", true)}${li("6506977011", 2, "Produce", true)}${li("16319281", 3, "Fresh Vegetables", false)}<ul>${li("111", 4, "Onions & Leeks", true)}${li("112", 4, "Peppers", true)}</ul></ul></div>`;
   const kids = S.adapters._parseAmazonPage(deptHtml, "https://www.amazon.com").children;
+  // Without a bold current category the list is about something else.
+  const noBold = S.adapters._parseAmazonPage(`<div id="departments"><ul>${li("1", 1, "Amazon Fresh", true)}${li("2", 2, "Kitchen & Dining", true)}</ul></div>`, "https://www.amazon.com").children;
+  // A product from Amazon's regular cart on a store page isn't the store's.
+  const form = (asin, action, price = "$1.99") => `<div data-component-type="s-search-result" data-asin="${asin}"><h2>${asin}</h2>${price ? `<span class="a-price"><span class="a-offscreen">${price}</span></span>` : ""}<form action="${action}"><input name="items[0.base][asin]" value="${asin}"></form></div>`;
+  const mixed = S.adapters._parseAmazonPage(form("B0FRESH001", "/cart/add-to-cart/local-market/QW1hem9uIEZyZXNo/") + form("B0NOPRICE1", "/cart/add-to-cart/local-market/QW1hem9uIEZyZXNo/", "") + form("B0SPOON001", "/cart/add-to-cart/ref=dp") + '<div data-component-type="s-search-result" data-asin="B0CELERI01"><h2>Celeriac, 2 lb</h2></div>', "https://www.amazon.com").products.map((p) => p.id);
 
   // A category shelf shows everything in its category.
   const card = '<div data-component-type="s-search-result" data-asin="B0NUTBUT01"><h2>Almond Butter</h2></div>';
@@ -135,7 +140,7 @@ const result = await page.evaluate(async ({ html, realHtml, barHtml }) => {
   };
   const browsed = await S.adapters.fresh().searchShelf(shelf("Nut & Seed Butters"));
   const fallback = { names: browsed.products.map((p) => p.name), asked };
-  return { kids, brands, fallback, paging, products, captcha, sent, added, noForm, cartUrl: fresh.cartUrl(), retried, refreshed, signedOut, evil, realProducts, departments, subs, layout };
+  return { noBold, mixed, kids, brands, fallback, paging, products, captcha, sent, added, noForm, cartUrl: fresh.cartUrl(), retried, refreshed, signedOut, evil, realProducts, departments, subs, layout };
 }, { html: fixture, realHtml: real, barHtml: bar });
 await browser.close();
 
@@ -161,6 +166,8 @@ const checks = [
   ["brands: guessed from the name when there's no list", result.brands.guessed.join("|") === "Barilla|De Cecco|365", result.brands.guessed],
   ["brands: kept together, the store brand beside the best seller, one-offs last", result.brands.order.join() === "1,4,5,7,3,6,2", result.brands.order],
   ["sub-categories: read from the sidebar, below the current category", JSON.stringify(result.kids) === JSON.stringify([{ node: "111", name: "Onions & Leeks" }, { node: "112", name: "Peppers" }]), result.kids],
+  ["sub-categories: none unless the current category is shown", result.noBold.length === 0, result.noBold],
+  ["leaves off products the store doesn't sell (other carts, no Add button, no price)", result.mixed.join() === "B0FRESH001", result.mixed],
   ["knows when there's another page", result.paging.page1.more && !result.paging.pageLast.more && result.paging.noNav.more],
   ["drops javascript: links", result.evil.url === "https://www.amazon.com/dp/B0EVIL" && result.evil.image === null],
 ];

@@ -172,6 +172,16 @@
       });
       if (products.length >= MAX_PER_SECTION) break;
     }
+    // On a store page (its Add buttons post to the store's cart), only
+    // products you can add to the store's cart are the store's: others
+    // (Amazon's regular cart, or no Add button) are outside sellers, like a
+    // $50 celeriac or a dinner spoon. Leave them off the shelf, and
+    // anything without a price ("See price": currently unavailable).
+    const fresh = (p) => p.addForm && /\/local-market\//.test(p.addForm.action);
+    if (products.some(fresh)) {
+      for (let i = products.length - 1; i >= 0; i--) if (!fresh(products[i]) || products[i].price == null) products.splice(i, 1);
+    }
+
     // The category's brands, from the sidebar's Brands filter.
     const brands = [...doc.querySelectorAll('[id*="brandsRefinements"] li')]
       .map((li) => text(li.querySelector(".a-size-base.a-color-base") || li))
@@ -181,11 +191,18 @@
     // sub-categories indented below it, each a link.
     const nav = [...doc.querySelectorAll('#departments li[id^="n/"]')];
     const indent = (li) => Number((li.className.match(/s-navigation-indent-(\d+)/) || [])[1] || 0);
-    const here = nav.filter((li) => !li.querySelector("a")).reduce((m, li) => Math.max(m, indent(li)), 0);
-    const children = nav
-      .filter((li) => li.querySelector("a") && indent(li) > here)
-      .map((li) => ({ node: li.id.slice(2), name: text(li.querySelector("a .a-size-base") || li.querySelector("a")) }))
-      .filter((c) => /^\d+$/.test(c.node) && c.name);
+    // Only the links directly under the bold current category, after it; if
+    // there's no bold category, the list isn't about this category (it can
+    // list other Amazon departments), so there are no sub-categories.
+    const current = nav.findIndex((li) => !li.querySelector("a") && li.querySelector(".a-text-bold"));
+    const here = current >= 0 ? indent(nav[current]) : -1;
+    const children = [];
+    for (const li of current >= 0 ? nav.slice(current + 1) : []) {
+      if (indent(li) <= here) break;
+      if (indent(li) !== here + 1 || !li.querySelector("a")) continue;
+      const c = { node: li.id.slice(2), name: text(li.querySelector("a .a-size-base") || li.querySelector("a")) };
+      if (/^\d+$/.test(c.node) && c.name) children.push(c);
+    }
     const total = totalOf(doc);
     const next = doc.querySelector(".s-pagination-next");
     const more = next ? !next.matches(".s-pagination-disabled, [aria-disabled='true']") : total != null && total > cardsBefore(doc, cards.length);

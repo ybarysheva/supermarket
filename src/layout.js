@@ -172,34 +172,39 @@
     const sidesOf = (place, fixtures) => (place ? place.sides.map((sd, i) => [place.id, i, sd]).filter(([, , sd]) => !fixtures || fixtures.includes(sd.fixture)) : []);
     const ref = ([id, i]) => [id, i];
 
-    // Wall runs are paired into corridors; a lone run faces a bare wall.
-    const pair = (faces, extra = {}) => {
-      const out = [];
-      for (let i = 0; i < faces.length; i += 2) out.push({ ...extra, left: [ref(faces[i])], right: faces[i + 1] ? [ref(faces[i + 1])] : [] });
-      return out;
-    };
 
     // Dairy with more than one run puts its first on the back wall.
     const dairyBack = !!dairy && dairy.sides.length > 1;
     const leftRuns = () => [...sidesOf(dairy).slice(dairyBack ? 1 : 0), ...sidesOf(frozen, ["freezer"])];
     const rightRuns = () => [...sidesOf(produce), ...sidesOf(bakery, ["rack"])];
 
-    // Runs are paired into corridors, so give each wing an even number by
-    // splitting its longest run in two.
-    const evenUp = (runs) => {
-      if (runs.length % 2 === 0) return;
-      const [id, i, sd] = runs.reduce((a, b) => (b[2].sections.length > a[2].sections.length ? b : a));
-      if (sd.sections.length < 2) return;
-      const [a, b] = split(sd.sections, 2);
-      places.find((p) => p.id === id).sides.splice(i, 1, { ...sd, sections: a }, { ...sd, sections: b });
+    // Short runs share a stretch of wall, as in a real store (cut fruit
+    // and nuts side by side), so no single category runs down a whole
+    // aisle; each stretch faces another across a corridor.
+    const pack = (runs) => {
+      const faces = [];
+      for (const r of runs) {
+        const n = r[2].sections.length;
+        const last = faces[faces.length - 1];
+        if (last && last.n < 5 && last.n + n <= 8) {
+          last.refs.push(ref(r));
+          last.n += n;
+        } else faces.push({ refs: [ref(r)], n });
+      }
+      // An odd number of stretches: give a shared one's last run its own.
+      if (faces.length % 2) {
+        const k = faces.findIndex((f) => f.refs.length > 1);
+        if (k >= 0) faces.splice(k + 1, 0, { refs: [faces[k].refs.pop()], n: 0 });
+      }
+      const out = [];
+      for (let i = 0; i < faces.length; i += 2) out.push({ left: faces[i].refs, right: faces[i + 1] ? faces[i + 1].refs : [] });
+      return out;
     };
-    evenUp(leftRuns());
-    evenUp(rightRuns());
 
     // Left wing: dairy coolers on the wall, then the freezers.
-    const leftCorridors = pair(leftRuns()).map((c) => withPlace(c));
+    const leftCorridors = pack(leftRuns()).map((c) => withPlace(c));
     // Right wing, by the entrance: produce and the bread racks.
-    const rightCorridors = pair(rightRuns(), { wide: true }).map((c) => withPlace(c));
+    const rightCorridors = pack(rightRuns()).map((c) => withPlace({ ...c, wide: true }));
 
     const corridors = [
       ...leftCorridors,
