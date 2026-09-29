@@ -24,6 +24,7 @@
   const UNSTOCK_RADIUS = 24; // …and empty them again past this one, to save memory
   const MAX_STOCKING = 2; // shelf requests queued at once (the store lets two out at a time)
   const SLOT = 0.2; // shelf space per product, as in a real store
+  const MAX_BAY = 4.8; // longest stretch of fixture one category gets
 
   // Where each product goes on a bay: `perRow` slots on each of `R` rows
   // (eye level first). Like a real store, the shelf carries the category's
@@ -45,20 +46,23 @@
     const list = [...groups.keys()].sort((a, b) => (a === "") - (b === "")).map((name) => ({ name, items: groups.get(name) }));
     const spots = [];
     const labels = [];
-    if (crates) {
-      list.flatMap((g) => g.items).slice(0, perRow * R).forEach((p, i) => spots.push({ p, r: Math.floor(i / perRow), col: i % perRow }));
-      return { spots, labels };
-    }
+    const order = (items) => (crates ? items : S.byBrand(items));
     if (list.length === 1) {
-      S.byBrand(products.slice(0, perRow * R)).forEach((p, i) => spots.push({ p, r: i % R, col: Math.floor(i / R) }));
+      const top = order(products.slice(0, perRow * R));
+      if (crates) top.forEach((p, i) => spots.push({ p, r: Math.floor(i / perRow), col: i % perRow }));
+      else top.forEach((p, i) => spots.push({ p, r: i % R, col: Math.floor(i / R) }));
       return { spots, labels };
     }
-    // Columns for each section: what it needs, or a fair share when the
-    // shelf is short (one each first, then to the biggest shortfall).
-    const need = list.map((g) => Math.ceil(g.items.length / R));
+    // Columns for each section: what it needs, up to a fair share so no
+    // one section (Avocados) takes over the display; one each first when
+    // the shelf is short. Spare columns stay empty, with room for more.
+    // Every section is at least two columns wide (its sign readable); a
+    // short shelf carries fewer sections.
+    const fair = Math.max(2, Math.ceil((perRow * 2) / list.length));
+    const need = list.map((g) => Math.max(2, Math.min(fair, Math.ceil(g.items.length / R))));
     const got = list.map(() => 0);
     let left = perRow;
-    for (let i = 0; i < list.length && left > 0; i++, left--) got[i] = 1;
+    for (let i = 0; i < list.length && left >= 2; i++, left -= 2) got[i] = 2;
     while (left > 0) {
       let best = -1;
       for (let i = 0; i < list.length; i++) if (got[i] && got[i] < need[i] && (best < 0 || need[i] - got[i] > need[best] - got[best])) best = i;
@@ -69,7 +73,7 @@
     let col0 = 0;
     list.forEach((g, i) => {
       if (!got[i]) return;
-      S.byBrand(g.items.slice(0, got[i] * R)).forEach((p, k) => spots.push({ p, r: k % R, col: col0 + Math.floor(k / R) }));
+      order(g.items.slice(0, got[i] * R)).forEach((p, k) => spots.push({ p, r: k % R, col: col0 + Math.floor(k / R) }));
       if (g.name) labels.push({ name: g.name, col0, cols: got[i] });
       col0 += got[i];
     });
@@ -520,8 +524,10 @@
           A.block(this.scene, C.endcap, 0.1, 2.0, L, originX - (faceSide === "left" ? 0.05 : -0.05), 1.0, Z0 + L / 2, true);
           return;
         }
+        // A section is at most MAX_BAY long; a short run leaves the rest of
+        // the aisle open rather than stretching a category down all of it.
         const total = face.entries.reduce((t, e) => t + e.bays, 0);
-        const unit = L / total;
+        const unit = Math.min(L / total, MAX_BAY);
         let z = Z0;
         for (const e of face.entries) {
           const w = e.bays * unit;
@@ -1088,8 +1094,9 @@
     // A small sign over one sub-category's section of the shelf ("Onions").
     sectionLabel(bay, name, x0, w) {
       const f = bay.fixture;
-      const lw = Math.min(w * 0.94, 0.9);
-      const tex = canvasTexture(512, 64, (g, cw, ch) => {
+      const lw = w * 0.94;
+      const lh = 0.065;
+      const tex = canvasTexture(Math.round(lw * 800), 52, (g, cw, ch) => {
         g.fillStyle = "#fffdf3";
         g.fillRect(0, 0, cw, ch);
         g.fillStyle = C.sign;
@@ -1097,10 +1104,10 @@
         g.fillStyle = "#1d2320";
         g.textAlign = "center";
         g.textBaseline = "middle";
-        g.fillText(fit(g, name, cw - 16, 38, 800, 12), cw / 2, ch / 2 - 2);
+        g.fillText(fit(g, name, cw - 12, 34, 800, 12), cw / 2, ch / 2 - 2);
       });
-      const m = plane(tex, lw, lw / 8);
-      m.position.set(x0 + w / 2, f.sign.y - 0.12 - lw / 16, f.sign.z + 0.01);
+      const m = plane(tex, lw, lh);
+      m.position.set(x0 + w / 2, f.sign.y - 0.12 - lh / 2, f.sign.z + 0.01);
       bay.stocked.add(m);
     }
 
@@ -1212,32 +1219,46 @@
 
     // The price tags along the front edge of one row.
     tagStrip(bay, row, items) {
-      const cw = Math.min(4096, Math.round(bay.w * PX_PER_M));
-      const ch = Math.round(TAG_H * PX_PER_M);
-      const px = (m) => ((m + bay.w / 2) / bay.w) * cw;
-      const tex = canvasTexture(cw, ch, (g) => {
-        g.fillStyle = "#8d959c";
-        g.fillRect(0, 0, cw, ch);
-        let prev = null;
-        for (const it of items.slice().sort((a, b) => a.x0 - b.x0)) {
-          const tw = Math.min(it.slotW * 0.94, 0.34) * (cw / bay.w);
-          const tx = px(it.x0) + (it.slotW * (cw / bay.w) - tw) / 2;
-          this.drawTag(g, it.p, tx, 4, tw, ch - 8);
-          // A dark line where one brand's block ends and the next begins.
-          const brand = S.brandKey(it.p);
-          if (prev !== null && brand !== prev) {
-            g.fillStyle = "#3b4247";
-            g.fillRect(px(it.x0) - 3, 0, 6, ch);
+      // Only as long as the products on the row, in pieces a texture can
+      // hold at full resolution (a long bay would squeeze every tag).
+      const sorted = items.slice().sort((a, b) => a.x0 - b.x0);
+      const maxW = 4096 / PX_PER_M;
+      const pieces = [];
+      for (const it of sorted) {
+        const last = pieces[pieces.length - 1];
+        if (last && it.x0 + it.slotW - last.x0 <= maxW) last.items.push(it);
+        else pieces.push({ x0: it.x0, items: [it] });
+      }
+      for (const piece of pieces) {
+        const end = piece.items[piece.items.length - 1];
+        const w = end.x0 + end.slotW - piece.x0;
+        const cw = Math.round(w * PX_PER_M);
+        const ch = Math.round(TAG_H * PX_PER_M);
+        const px = (m) => (m - piece.x0) * PX_PER_M;
+        const tex = canvasTexture(cw, ch, (g) => {
+          g.fillStyle = "#8d959c";
+          g.fillRect(0, 0, cw, ch);
+          let prev = null;
+          for (const it of piece.items) {
+            const tw = Math.min(it.slotW * 0.94, 0.34) * PX_PER_M;
+            const tx = px(it.x0) + (it.slotW * PX_PER_M - tw) / 2;
+            this.drawTag(g, it.p, tx, 4, tw, ch - 8);
+            // A dark line where one brand's block ends and the next begins.
+            const brand = S.brandKey(it.p);
+            if (prev !== null && brand !== prev) {
+              g.fillStyle = "#3b4247";
+              g.fillRect(px(it.x0) - 3, 0, 6, ch);
+            }
+            prev = brand;
           }
-          prev = brand;
-        }
-      });
-      const m = plane(tex, bay.w, TAG_H);
-      m.position.set(0, row.tag.y, row.tag.z);
-      m.rotation.x = -row.tag.lean;
-      m.userData.tags = { bay, items };
-      bay.stocked.add(m);
-      this.pickables.add(m);
+        });
+        const m = plane(tex, w, TAG_H);
+        m.position.set(piece.x0 + w / 2, row.tag.y, row.tag.z);
+        m.rotation.x = -row.tag.lean;
+        m.userData.tags = { bay, items: piece.items, x0: piece.x0, w };
+        bay.stocked.add(m);
+        this.pickables.add(m);
+      }
     }
 
     // A little price sign on a stake at the back of a produce crate.
@@ -1545,7 +1566,7 @@
       const u = hit.object.userData;
       if (u.product) return u.product;
       if (u.tags && hit.uv) {
-        const x = hit.uv.x * u.tags.bay.w - u.tags.bay.w / 2;
+        const x = u.tags.x0 + hit.uv.x * u.tags.w;
         const it = u.tags.items.find((i) => x >= i.x0 && x < i.x0 + i.slotW);
         return it ? it.p : null;
       }
