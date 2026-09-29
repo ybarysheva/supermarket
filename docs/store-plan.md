@@ -196,3 +196,17 @@ Office & School shelf that found nothing) led to phase 4.
   there; the rest go last.
 - Sections get columns by how many products they have, one each first
   when the shelf is short.
+
+## Sizing (built)
+
+- Aisles are 24 m, with up to 6 categories per side.
+- A category's shelf is sized by what it carried the last time it was
+  stocked (remembered per store): room for each sub-category section
+  (60 cm each) and its products, from half a 2.4 m bay to three. A
+  category not stocked yet gets one bay; one that had nothing from the
+  store in the last week (all regular Amazon, like Office & School's
+  Presentation Supplies) gets no shelf. No bay stretches past 3.2 m.
+- Sub-category sections go up together once they've all loaded, so the
+  shelf doesn't rearrange itself as each one arrives.
+- Only products you can add to the store's cart go on shelves; a page
+  with none has nothing from the store on it.
