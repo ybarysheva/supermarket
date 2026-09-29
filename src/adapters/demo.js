@@ -183,6 +183,11 @@
 
   const search = async (query) => (await page(query)).products;
 
+  const SUBCATEGORIES = {
+    "Fresh Vegetables": ["Onions", "Peppers", "Carrots", "Broccoli", "Tomatoes"],
+    Pasta: ["Spaghetti", "Penne", "Egg Noodles", "Gluten-Free"],
+  };
+
   // The practice store's departments and categories, shaped like a real
   // store's (see the Amazon adapter's catalog()); the aisles are built from
   // these just as they are for a real store.
@@ -215,7 +220,19 @@
     tagline: "Practice store — nothing is really bought",
     search,
     catalog: () => new Promise((resolve) => setTimeout(() => resolve(DEPARTMENTS), 300)),
-    searchShelf: (section, place, cursor) => page(section.query || section.name, cursor ? cursor.page : 1),
+    // Like Amazon's, some categories have sub-categories, each stocked as a
+    // section of the shelf (see the Amazon adapter's searchShelf).
+    async searchShelf(section, place, cursor) {
+      if (cursor && cursor.groups) {
+        const g = cursor.groups[cursor.i];
+        const r = await page(`${g.name} ${section.name}`);
+        const next = cursor.i + 1 < cursor.groups.length ? { ...cursor, i: cursor.i + 1 } : null;
+        return { products: r.products.slice(0, 12).map((p) => ({ ...p, id: `${p.id}-${g.name}`, group: g.name })), total: null, next };
+      }
+      const r = await page(section.query || section.name, cursor ? cursor.page : 1);
+      const kids = !cursor && SUBCATEGORIES[section.name];
+      return kids ? { ...r, next: { groups: kids.map((name) => ({ name })), i: 0 } } : r;
+    },
     async addToCart() {
       return { ok: true };
     },

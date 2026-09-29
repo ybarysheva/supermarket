@@ -159,7 +159,9 @@ Office & School shelf that found nothing) led to phase 4.
    are sorted into fresh departments and center aisles by name, shelves
    onto fixtures by name, and runs of shelves are paired into corridors.
    A department with no subcategories is one shelf.
-3. **Shelves** browse their category (`rh=n:<category>`, no search words).
+3. **Shelves** browse their category (`rh=n:<category>`, no search words)
+   in best-seller order (`s=exact-aware-popularity-rank`; Amazon's
+   default "Featured" order mixes in oddities when there are no words).
    Some categories list nothing when browsed directly; then the shelf
    searches for the category's name, within its department, then the
    whole store.
@@ -180,6 +182,17 @@ Office & School shelf that found nothing) led to phase 4.
   single product at the end. Each brand fills columns top to bottom, eye
   level first, so its best sellers are at eye level; a dark line on the
   price-tag strip marks where brands change.
-- Next: sections inside a shelf by sub-category (Spaghetti, Penne…), from
-  the same sidebar's department list, fetched in place of more pages of
-  the mixed list.
+
+## Sub-category sections (built)
+
+- A category with sub-categories (Fresh Vegetables: Onions, Peppers…) is
+  stocked like a real shelf, one section per sub-category, each with a
+  small sign, brand blocks inside. The sub-categories come from the
+  sidebar's Department list on the shelf's first page (the current
+  category in bold, its sub-categories indented below it).
+- While you stand at the shelf, each sub-category's best sellers are
+  fetched (one page each, up to 12), in place of more pages of the mixed
+  list, so it costs no extra requests. Products marked with a section go
+  there; the rest go last.
+- Sections get columns by how many products they have, one each first
+  when the shelf is short.

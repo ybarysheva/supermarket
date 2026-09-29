@@ -24,6 +24,57 @@
   const UNSTOCK_RADIUS = 24; // …and empty them again past this one, to save memory
   const MAX_STOCKING = 2; // shelf requests queued at once (the store lets two out at a time)
   const SLOT = 0.2; // shelf space per product, as in a real store
+
+  // Where each product goes on a bay: `perRow` slots on each of `R` rows
+  // (eye level first). Like a real store, the shelf carries the category's
+  // best sellers, as many as fit.
+  //
+  // Products marked with a sub-category (`group`) get a section of their
+  // own, a few columns wide, in the store's order; the rest go last.
+  // Packaged goods stand in brand blocks: each brand fills columns from eye
+  // level up and down, so it reads as a strip of the shelf with its best
+  // sellers at eye level. Loose produce (crates) fills row by row.
+  // Returns { spots: [{ p, r, col }], labels: [{ name, col0, cols }] }.
+  function planShelf(products, perRow, R, crates) {
+    const groups = new Map();
+    for (const p of products) {
+      const key = p.group || "";
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(p);
+    }
+    const list = [...groups.keys()].sort((a, b) => (a === "") - (b === "")).map((name) => ({ name, items: groups.get(name) }));
+    const spots = [];
+    const labels = [];
+    if (crates) {
+      list.flatMap((g) => g.items).slice(0, perRow * R).forEach((p, i) => spots.push({ p, r: Math.floor(i / perRow), col: i % perRow }));
+      return { spots, labels };
+    }
+    if (list.length === 1) {
+      S.byBrand(products.slice(0, perRow * R)).forEach((p, i) => spots.push({ p, r: i % R, col: Math.floor(i / R) }));
+      return { spots, labels };
+    }
+    // Columns for each section: what it needs, or a fair share when the
+    // shelf is short (one each first, then to the biggest shortfall).
+    const need = list.map((g) => Math.ceil(g.items.length / R));
+    const got = list.map(() => 0);
+    let left = perRow;
+    for (let i = 0; i < list.length && left > 0; i++, left--) got[i] = 1;
+    while (left > 0) {
+      let best = -1;
+      for (let i = 0; i < list.length; i++) if (got[i] && got[i] < need[i] && (best < 0 || need[i] - got[i] > need[best] - got[best])) best = i;
+      if (best < 0) break;
+      got[best]++;
+      left--;
+    }
+    let col0 = 0;
+    list.forEach((g, i) => {
+      if (!got[i]) return;
+      S.byBrand(g.items.slice(0, got[i] * R)).forEach((p, k) => spots.push({ p, r: k % R, col: col0 + Math.floor(k / R) }));
+      if (g.name) labels.push({ name: g.name, col0, cols: got[i] });
+      col0 += got[i];
+    });
+    return { spots, labels };
+  }
   const CRATE_SLOT = 0.3; // per crate of loose produce
 
   const C = {
@@ -102,6 +153,10 @@
     while (t.length > 1 && g.measureText(t + "…").width > maxW) t = t.slice(0, -1);
     return t + "…";
   }
+
+  // "$0.21/Ounce" → "$0.21/oz", as a shelf tag would print it.
+  const UNITS = [[/fl(uid)?\.? ?ounces?/i, "fl oz"], [/ounces?/i, "oz"], [/pounds?/i, "lb"], [/count/i, "ct"], [/each/i, "ea"], [/kilograms?/i, "kg"], [/\bgrams?/i, "g"], [/liters?|litres?/i, "L"], [/gallons?/i, "gal"], [/quarts?/i, "qt"], [/pints?/i, "pt"], [/sheets?/i, "sheet"]];
+  const shortUnit = (u) => UNITS.reduce((t, [re, abbr]) => t.replace(re, abbr), u).replace(/\s*\/\s*/, "/").trim();
 
   function signTexture(lines, bg, w = 1024, h = 192) {
     return canvasTexture(w, h, (g) => {
@@ -826,7 +881,8 @@
 
     wantsMore(bay) {
       const s = this.store.shelfState(bay.section);
-      return bay.state === "ready" && !!bay.capacity && !!s && !!s.next && !s.morePromise && !s.moreError && s.products.length < bay.capacity;
+      // Room left, or sub-category sections still to load.
+      return bay.state === "ready" && !!bay.capacity && !!s && !!s.next && !s.morePromise && !s.moreError && (s.products.length < bay.capacity || !!s.next.groups);
     }
 
     loadMore(bay) {
@@ -1007,18 +1063,11 @@
       const perRow = Math.max(1, Math.floor(inner / (crates ? CRATE_SLOT : SLOT)));
       const slotW = inner / perRow;
       bay.capacity = perRow * rows.length;
-      // The best sellers that fit. Packaged goods stand in brand blocks:
-      // each brand fills columns from eye level up and down, so it reads as
-      // one strip of the shelf with its best sellers at eye level. Loose
-      // produce fills row by row.
-      const top = products.slice(0, bay.capacity);
-      const shown = crates ? top : S.byBrand(top);
-      const tagRows = rows.map(() => []);
       const R = rows.length;
+      const { spots, labels } = planShelf(products, perRow, R, crates);
+      const tagRows = rows.map(() => []);
 
-      shown.forEach((p, idx) => {
-        const r = crates ? Math.floor(idx / perRow) : idx % R;
-        const col = crates ? idx % perRow : Math.floor(idx / R);
+      spots.forEach(({ p, r, col }) => {
         const row = rows[r];
         const x0 = -inner / 2 + col * slotW;
         const item = row.kind === "crate" ? this.crate(bay, row, p, x0, slotW) : this.facings(bay, row, p, x0, slotW);
@@ -1032,7 +1081,27 @@
         if (row.kind === "crate") tagRows[r].forEach((it) => this.stakeTag(bay, it));
         else this.tagStrip(bay, row, tagRows[r]);
       });
+      for (const l of labels) this.sectionLabel(bay, l.name, -inner / 2 + l.col0 * slotW, l.cols * slotW);
       this.refreshBadges();
+    }
+
+    // A small sign over one sub-category's section of the shelf ("Onions").
+    sectionLabel(bay, name, x0, w) {
+      const f = bay.fixture;
+      const lw = Math.min(w * 0.94, 0.9);
+      const tex = canvasTexture(512, 64, (g, cw, ch) => {
+        g.fillStyle = "#fffdf3";
+        g.fillRect(0, 0, cw, ch);
+        g.fillStyle = C.sign;
+        g.fillRect(0, ch - 6, cw, 6);
+        g.fillStyle = "#1d2320";
+        g.textAlign = "center";
+        g.textBaseline = "middle";
+        g.fillText(fit(g, name, cw - 16, 38, 800, 12), cw / 2, ch / 2 - 2);
+      });
+      const m = plane(tex, lw, lw / 8);
+      m.position.set(x0 + w / 2, f.sign.y - 0.12 - lw / 16, f.sign.z + 0.01);
+      bay.stocked.add(m);
     }
 
     // Packages, side by side: wide slots get several facings of each.
@@ -1195,11 +1264,22 @@
       g.fillText(fit(g, p.name, w - 22, Math.round(h * 0.22), 500, 9), x + 14, y + h * 0.3);
       g.fillStyle = "#1d2320";
       const price = p.price == null ? "See price" : `$${p.price.toFixed(2)}`;
-      g.fillText(fit(g, price, w * 0.62, p.price == null ? Math.round(h * 0.3) : Math.round(h * 0.52), 900, 10), x + 14, y + h * 0.86);
+      // The unit price, in shelf-tag shorthand ("$0.21/oz"), keeps its
+      // room; the big price fits in what's left.
+      let unit = "";
+      let unitW = 0;
       if (p.unitPrice) {
+        unit = fit(g, shortUnit(p.unitPrice), w * 0.45, Math.round(h * 0.2), 600, 9);
+        unitW = g.measureText(unit).width;
+      }
+      const unitFont = g.font;
+      const priceText = fit(g, price, w - 26 - unitW, p.price == null ? Math.round(h * 0.3) : Math.round(h * 0.52), 900, 10);
+      g.fillText(priceText, x + 14, y + h * 0.86);
+      if (unit) {
+        g.font = unitFont;
         g.fillStyle = "#56605a";
         g.textAlign = "right";
-        g.fillText(fit(g, p.unitPrice, w * 0.36, Math.round(h * 0.18), 500, 8), x + w - 6, y + h * 0.84);
+        g.fillText(unit, x + w - 6, y + h * 0.84);
       }
     }
 

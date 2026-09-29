@@ -290,11 +290,23 @@
         s.morePromise = this.schedule(() => this.askShelf(section, place, s.next))
           .then(
             (r) => {
-              const have = new Set(s.products.map((p) => p.id));
+              const have = new Map(s.products.map((p) => [p.id, p]));
               const added = r.products.filter((p) => !have.has(p.id));
-              if (added.length) s.products = [...s.products, ...added];
+              // A product already on the shelf may turn out to belong to a
+              // sub-category section.
+              let grouped = false;
+              for (const p of r.products) {
+                const old = have.get(p.id);
+                if (old && p.group && !old.group) {
+                  old.group = p.group;
+                  grouped = true;
+                }
+              }
+              if (added.length || grouped) s.products = [...s.products, ...added];
               s.total = r.total ?? s.total;
-              s.next = added.length ? r.next : null; // a page of repeats: that's all
+              // A page of repeats means that's all, unless it's one of the
+              // shelf's sub-category sections.
+              s.next = added.length || (r.next && r.next.groups) ? r.next : null;
             },
             (error) => {
               s.moreError = error;
@@ -725,7 +737,9 @@
       if (!products.length) {
         return [h("div", { class: "sm-out-of-stock" }, h("strong", {}, "Empty shelf"), h("span", {}, "Nothing here right now — try asking at the top."))];
       }
-      products = S.byBrand(products);
+      // Sub-category sections in order, the rest last, brands together.
+      const groups = [...new Set(products.map((p) => p.group || ""))].sort((a, b) => (a === "") - (b === ""));
+      products = groups.flatMap((g) => S.byBrand(products.filter((p) => (p.group || "") === g)));
       const perRow = Math.min(8, Math.max(2, Math.ceil(products.length / 3)));
       const rows = [];
       for (let i = 0; i < products.length; i += perRow) rows.push(products.slice(i, i + perRow));
