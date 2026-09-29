@@ -158,6 +158,11 @@
     return t + "…";
   }
 
+  // Amazon's photo service scales on request: a shelf texture is 256 px,
+  // so ask for that, as compressed WebP (several times smaller than the
+  // search page's 320 px JPEG). The close-up keeps the original.
+  const shelfPhoto = (url) => (/^https:\/\/m\.media-amazon\.com\/images\//.test(url) ? url.replace(/\._[A-Za-z0-9_,]+_\.(jpg|jpeg|png)$/i, "._AC_UL256_FMwebp_QL65_.jpg") : url);
+
   // "$0.21/Ounce" → "$0.21/oz", as a shelf tag would print it.
   const UNITS = [[/fl(uid)?\.? ?ounces?/i, "fl oz"], [/ounces?/i, "oz"], [/pounds?/i, "lb"], [/count/i, "ct"], [/each/i, "ea"], [/kilograms?/i, "kg"], [/\bgrams?/i, "g"], [/liters?|litres?/i, "L"], [/gallons?/i, "gal"], [/quarts?/i, "qt"], [/pints?/i, "pt"], [/sheets?/i, "sheet"]];
   const shortUnit = (u) => UNITS.reduce((t, [re, abbr]) => t.replace(re, abbr), u).replace(/\s*\/\s*/, "/").trim();
@@ -1198,8 +1203,9 @@
         front.map = labelTexture(p.name);
         return;
       }
-      bay.imageUrls.push(p.image);
-      acquireTexture(p.image).then(
+      const url = shelfPhoto(p.image);
+      bay.imageUrls.push(url);
+      acquireTexture(url).then(
         ({ texture, aspect }) => {
           if (bay.token !== token) return;
           texture.userData.shared = true; // owned by the cache, not the material
@@ -1281,23 +1287,37 @@
       g.fillRect(x, y, 8, h);
       g.fillStyle = "#56605a";
       g.textBaseline = "alphabetic";
-      g.textAlign = "left";
-      g.fillText(fit(g, p.name, w - 22, Math.round(h * 0.22), 500, 9), x + 14, y + h * 0.3);
-      g.fillStyle = "#1d2320";
       const price = p.price == null ? "See price" : `$${p.price.toFixed(2)}`;
-      // The unit price, in shelf-tag shorthand ("$0.21/oz"), keeps its
-      // room; the big price fits in what's left.
-      let unit = "";
-      let unitW = 0;
-      if (p.unitPrice) {
-        unit = fit(g, shortUnit(p.unitPrice), w * 0.45, Math.round(h * 0.2), 600, 9);
-        unitW = g.measureText(unit).width;
-      }
-      const unitFont = g.font;
-      const priceText = fit(g, price, w - 26 - unitW, p.price == null ? Math.round(h * 0.3) : Math.round(h * 0.52), 900, 10);
-      g.fillText(priceText, x + 14, y + h * 0.86);
+      // The price comes first; the unit price ("$0.21/oz", shelf-tag
+      // shorthand) takes what's left beside it, or moves up to the name
+      // line when the tag is too narrow.
+      const priceText = fit(g, price, w - 22, p.price == null ? Math.round(h * 0.3) : Math.round(h * 0.52), 900, 10);
+      const priceFont = g.font;
+      const priceW = g.measureText(priceText).width;
+      const unit = p.unitPrice ? shortUnit(p.unitPrice) : "";
+      let unitBeside = false;
       if (unit) {
-        g.font = unitFont;
+        g.font = `600 ${Math.round(h * 0.2)}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
+        unitBeside = g.measureText(unit).width <= w - 14 - priceW - 12;
+      }
+      g.textAlign = "left";
+      g.fillStyle = "#56605a";
+      let nameW = w - 22;
+      if (unit && !unitBeside) {
+        g.font = `600 ${Math.round(h * 0.2)}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
+        const top = fit(g, unit, w * 0.5, Math.round(h * 0.2), 600, 8);
+        const tw = g.measureText(top).width;
+        g.textAlign = "right";
+        g.fillText(top, x + w - 6, y + h * 0.3);
+        g.textAlign = "left";
+        nameW = w - 26 - tw;
+      }
+      g.fillText(fit(g, p.name, nameW, Math.round(h * 0.22), 500, 9), x + 14, y + h * 0.3);
+      g.font = priceFont;
+      g.fillStyle = "#1d2320";
+      g.fillText(priceText, x + 14, y + h * 0.86);
+      if (unit && unitBeside) {
+        g.font = `600 ${Math.round(h * 0.2)}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
         g.fillStyle = "#56605a";
         g.textAlign = "right";
         g.fillText(unit, x + w - 6, y + h * 0.84);
