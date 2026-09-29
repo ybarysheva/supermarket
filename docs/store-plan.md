@@ -159,7 +159,9 @@ Office & School shelf that found nothing) led to phase 4.
    are sorted into fresh departments and center aisles by name, shelves
    onto fixtures by name, and runs of shelves are paired into corridors.
    A department with no subcategories is one shelf.
-3. **Shelves** browse their category (`rh=n:<category>`, no search words).
+3. **Shelves** browse their category (`rh=n:<category>`, no search words)
+   in best-seller order (`s=exact-aware-popularity-rank`; Amazon's
+   default "Featured" order mixes in oddities when there are no words).
    Some categories list nothing when browsed directly; then the shelf
    searches for the category's name, within its department, then the
    whole store.

@@ -312,25 +312,29 @@
     }
 
 
-    async function fetchResults(query, node, page = 1) {
+    // `best`: in best-seller order (a shelf), rather than Amazon's default
+    // "Featured" order, which for a category with no search words mixes in
+    // oddities.
+    async function fetchResults(query, node, page = 1, best = false) {
       const url = new URL("/s", origin);
       if (query) url.searchParams.set("k", query);
       url.searchParams.set("i", store.searchIndex);
       if (node) url.searchParams.set("rh", `n:${node}`);
+      if (best) url.searchParams.set("s", "exact-aware-popularity-rank");
       if (page > 1) url.searchParams.set("page", String(page));
       return parsePage(await fetchPage(url.href), origin);
     }
 
     // One page of a search, as { products, total, next }: `next` is where
     // the page after it is, for searchShelf.
-    async function cachedResults(query, node, page = 1) {
-      const key = `supermarket:${store.id}:${node || ""}:${query}:${page}`;
+    async function cachedResults(query, node, page = 1, best = false) {
+      const key = `supermarket:${store.id}:${node || ""}:${query}:${page}${best ? ":best" : ""}`;
       let r = cacheGet(key);
       if (!r) {
-        r = await fetchResults(query, node, page);
+        r = await fetchResults(query, node, page, best);
         cacheSet(key, r);
       }
-      return { products: r.products, total: r.total ?? null, next: r.more ? { node: node || null, page: page + 1 } : null };
+      return { products: r.products, total: r.total ?? null, next: r.more ? { node: node || null, page: page + 1, best } : null };
     }
 
     async function postForm(form, qty) {
@@ -366,9 +370,11 @@
       // sellers first (or a search, for a display of "everything matching").
       // Returns { products, total, next }; pass `next` back for the page after.
       async searchShelf(section, place, cursor) {
-        if (cursor) return cachedResults(cursor.query ?? section.query, cursor.node, cursor.page);
+        if (cursor) return cachedResults(cursor.query ?? section.query, cursor.node, cursor.page, !!cursor.best);
         const cat = section.category;
-        const r = await cachedResults(section.query, cat && cat.node);
+        // A category shelf carries its best sellers; a display of
+        // "everything matching…" keeps Amazon's relevance order.
+        const r = await cachedResults(section.query, cat && cat.node, 1, !!cat);
         if (r.products.length || !cat) return r;
         // Amazon lists nothing when some categories are browsed directly;
         // search for the category's name instead, within its department,
@@ -376,7 +382,7 @@
         const words = cat.name.replace(/&/g, " ").replace(/\s+/g, " ").trim();
         for (const node of [section.departmentNode, null]) {
           if (node === undefined) continue;
-          const w = await cachedResults(words, node);
+          const w = await cachedResults(words, node, 1, true);
           if (w.products.length) return { ...w, next: w.next && { ...w.next, query: words } };
         }
         return r;

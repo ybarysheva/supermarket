@@ -1,6 +1,6 @@
 {
   "name": "supermarket-mode",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "private": true,
   "description": "A browser extension that lets you shop Amazon Fresh and Whole Foods like a real supermarket.",
   "scripts": {
